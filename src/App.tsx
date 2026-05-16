@@ -6,7 +6,7 @@ import { CHUNK_SIZE, RENDER_DISTANCE, getTerrainSurfaceHeight, getBlock } from '
 import { terrainWorkerManager } from './terrainWorkerManager';
 import { raycast } from './voxelRaycaster';
 import { setBlockMain, chunkEvents } from './playerActions';
-import { world, playerEntity, Position, Velocity, PlayerState, movementSystem } from './ecs';
+import { world, playerEntity, Position, Velocity, PlayerState } from './ecs';
 
 // --- State and Handlers ---
 
@@ -232,6 +232,9 @@ function Player() {
     
     // Direction based on joystick X and Y
     direction.current.set(controlState.move.x, 0, controlState.move.y);
+    if (direction.current.lengthSq() > 1) {
+        direction.current.normalize();
+    }
     
     // Rotate the movement vector to match where the player is currently looking (yaw)
     direction.current.applyEuler(new THREE.Euler(0, controlState.look.yaw, 0));
@@ -239,25 +242,50 @@ function Player() {
     // Apply velocity to position
     const oldPosition = new THREE.Vector3(Position.x[playerEntity], Position.y[playerEntity], Position.z[playerEntity]);
     
+    // Apply velocity for horizontal movement
     Velocity.x[playerEntity] = direction.current.x * speed;
     Velocity.z[playerEntity] = direction.current.z * speed;
     
-    Position.x[playerEntity] += Velocity.x[playerEntity] * dt;
-    Position.z[playerEntity] += Velocity.z[playerEntity] * dt;
+    const PLAYER_RADIUS = 0.3;
+    const PLAYER_HEIGHT = 1.6;
+    const EPSILON = 0.001;
+
+    const checkAABB = (dx: number, dy: number, dz: number) => {
+        const x = Position.x[playerEntity] + dx;
+        const feetY = Position.y[playerEntity] + dy - 1.62;
+        const z = Position.z[playerEntity] + dz;
+
+        const minX = Math.floor(x - PLAYER_RADIUS + 0.5 + EPSILON);
+        const maxX = Math.floor(x + PLAYER_RADIUS + 0.5 - EPSILON);
+        const minY = Math.floor(feetY + 0.5 + EPSILON);
+        const maxY = Math.floor(feetY + PLAYER_HEIGHT + 0.5 - EPSILON);
+        const minZ = Math.floor(z - PLAYER_RADIUS + 0.5 + EPSILON);
+        const maxZ = Math.floor(z + PLAYER_RADIUS + 0.5 - EPSILON);
+
+        for (let bx = minX; bx <= maxX; bx++) {
+            for (let by = minY; by <= maxY; by++) {
+                for (let bz = minZ; bz <= maxZ; bz++) {
+                    if (getBlock(bx, by, bz) !== 0) return true;
+                }
+            }
+        }
+        return false;
+    };
     
-    const worldX = Math.round(Position.x[playerEntity]);
-    const worldZ = Math.round(Position.z[playerEntity]);
-    
-    // Simple horizontal collision
-    const expectedFloorY = Math.floor(Position.y[playerEntity] - 1.62);
-    
-    // Check points near player's feet and head
-    const collisionFeet = getBlock(worldX, expectedFloorY + 1, worldZ) !== 0;
-    const collisionHead = getBlock(worldX, expectedFloorY + 2, worldZ) !== 0;
-    
-    if (collisionFeet || collisionHead) {
-        Position.x[playerEntity] = oldPosition.x;
-        Position.z[playerEntity] = oldPosition.z;
+    // Check X collision
+    let tempX = Velocity.x[playerEntity] * dt;
+    if (checkAABB(tempX, 0, 0)) {
+        Velocity.x[playerEntity] = 0;
+    } else {
+        Position.x[playerEntity] += tempX;
+    }
+
+    // Check Z collision
+    let tempZ = Velocity.z[playerEntity] * dt;
+    if (checkAABB(0, 0, tempZ)) {
+        Velocity.z[playerEntity] = 0;
+    } else {
+        Position.z[playerEntity] += tempZ;
     }
     
     // Apply Gravity and Vertical Velocity
@@ -267,46 +295,30 @@ function Player() {
     Velocity.y[playerEntity] -= GRAVITY * dt;
     if (Velocity.y[playerEntity] < -30) Velocity.y[playerEntity] = -30;
     
-    const newY = Position.y[playerEntity] + Velocity.y[playerEntity] * dt;
-    const currentWorldX = Math.round(Position.x[playerEntity]);
-    const currentWorldZ = Math.round(Position.z[playerEntity]);
-    
+    let tempY = Velocity.y[playerEntity] * dt;
+
     // Vertical Collision
-    const feetY = newY - 1.62;
-    const feetBlockY = Math.round(feetY);
-    
-    if (Velocity.y[playerEntity] <= 0 && getBlock(currentWorldX, feetBlockY, currentWorldZ) !== 0) {
-        if (feetY < feetBlockY + 0.5) {
-            // Hit ground
-            Velocity.y[playerEntity] = 0;
-            Position.y[playerEntity] = feetBlockY + 0.5 + 1.62;
-            
-            if (controlState.jump) {
-                Velocity.y[playerEntity] = JUMP_FORCE;
-            }
-        } else {
-            Position.y[playerEntity] = newY;
+    if (Velocity.y[playerEntity] <= 0 && checkAABB(0, tempY, 0)) {
+        // Hit ground
+        Velocity.y[playerEntity] = 0;
+        const targetFeetY = Position.y[playerEntity] + tempY - 1.62;
+        const hitBlockY = Math.floor(targetFeetY + 0.5 - EPSILON);
+        Position.y[playerEntity] = hitBlockY + 0.5 + 1.62;
+        
+        if (controlState.jump) {
+            Velocity.y[playerEntity] = JUMP_FORCE;
         }
-    } else if (Velocity.y[playerEntity] > 0) {
-        const headY = newY + 0.2;
-        const headBlockY = Math.round(headY);
-        if (getBlock(currentWorldX, headBlockY, currentWorldZ) !== 0) {
-            if (headY > headBlockY - 0.5) {
-                // Hit ceiling
-                Velocity.y[playerEntity] = 0;
-                Position.y[playerEntity] = headBlockY - 0.5 - 0.2;
-            } else {
-                Position.y[playerEntity] = newY;
-            }
-        } else {
-            Position.y[playerEntity] = newY;
-        }
+    } else if (Velocity.y[playerEntity] > 0 && checkAABB(0, tempY, 0)) {
+        // Hit ceiling
+        Velocity.y[playerEntity] = 0;
+        const targetHeadY = Position.y[playerEntity] + tempY - 1.62 + PLAYER_HEIGHT;
+        const hitBlockY = Math.floor(targetHeadY + 0.5 + EPSILON);
+        Position.y[playerEntity] = hitBlockY - 0.5 - PLAYER_HEIGHT + 1.62;
     } else {
-        Position.y[playerEntity] = newY;
+        Position.y[playerEntity] += tempY;
     }
 
-    // 執行 ECS System
-    movementSystem(world, dt);
+
 
     // Sync back to camera
     camera.position.set(Position.x[playerEntity], Position.y[playerEntity], Position.z[playerEntity]);
@@ -382,14 +394,7 @@ function SunLight() {
   return (
     <directionalLight
       ref={lightRef}
-      castShadow
       intensity={1.2}
-      shadow-mapSize={[2048, 2048]}
-      shadow-camera-left={-40}
-      shadow-camera-right={40}
-      shadow-camera-top={40}
-      shadow-camera-bottom={-40}
-      shadow-bias={-0.0005}
     />
   );
 }
@@ -453,18 +458,18 @@ function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: numbe
     return (
         <group>
             {geometries.grass && (
-                <mesh geometry={geometries.grass} receiveShadow castShadow frustumCulled={true}>
-                    <meshStandardMaterial map={textures.grass} roughness={1} metalness={0} />
+                <mesh geometry={geometries.grass} frustumCulled={true}>
+                    <meshLambertMaterial map={textures.grass} />
                 </mesh>
             )}
             {geometries.log && (
-                <mesh geometry={geometries.log} receiveShadow castShadow frustumCulled={true}>
-                    <meshStandardMaterial map={textures.log} roughness={1} metalness={0} />
+                <mesh geometry={geometries.log} frustumCulled={true}>
+                    <meshLambertMaterial map={textures.log} />
                 </mesh>
             )}
             {geometries.leaves && (
-                <mesh geometry={geometries.leaves} receiveShadow castShadow frustumCulled={true}>
-                    <meshStandardMaterial map={textures.leaves} roughness={1} metalness={0} transparent={true} alphaTest={0.1} />
+                <mesh geometry={geometries.leaves} frustumCulled={true}>
+                    <meshLambertMaterial map={textures.leaves} transparent={true} alphaTest={0.1} />
                 </mesh>
             )}
         </group>

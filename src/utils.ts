@@ -34,9 +34,17 @@ export function getBaseBlock(worldX: number, worldY: number, worldZ: number) {
     const isSolid = getDensity(worldX, worldY, worldZ) > 0;
     if (!isSolid) return 0;
     
-    // Add cave generation using 3D noise
-    const caveNoise = Math.abs(noise3D(worldX * 0.06, worldY * 0.06, worldZ * 0.06));
-    if (caveNoise < 0.15) {
+    // Add spaghetti/noodle cave generation using two intersecting ridged 3D noises
+    const caveScale = 0.04;
+    // Two different noise samples (offsetting the coordinates for the second one)
+    const caveNoise1 = noise3D(worldX * caveScale, worldY * caveScale, worldZ * caveScale);
+    const caveNoise2 = noise3D(worldX * caveScale + 10000, worldY * caveScale + 10000, worldZ * caveScale + 10000);
+    
+    const wormThickness = 0.08;
+    
+    // Intersect the two "thick peels" (ridged noises) 
+    // Square sum gives a cylindrical tunnel shape instead of square
+    if (caveNoise1 * caveNoise1 + caveNoise2 * caveNoise2 < wormThickness * wormThickness) {
         // Taper caves slightly near surface
         const scale = 0.02;
         const baseHeight = 16 + noise2D(worldX * scale, worldZ * scale) * 12;
@@ -44,8 +52,10 @@ export function getBaseBlock(worldX: number, worldY: number, worldZ: number) {
         if (depth > 8) {
             return 0; // Cave tunnel
         } else if (depth > 2) {
-            // transition zone
-            if (caveNoise < 0.15 * ((depth - 2) / 6.0)) return 0;
+            // Transition zone (tapering thickness)
+            const depthFactor = (depth - 2) / 6.0;
+            const taperedThickness = wormThickness * depthFactor;
+            if (caveNoise1 * caveNoise1 + caveNoise2 * caveNoise2 < taperedThickness * taperedThickness) return 0;
         }
     }
     
@@ -71,8 +81,7 @@ export function getTreeBaseY(worldX: number, worldZ: number) {
             
             // Limit cache size to prevent memory leaks
             if (treeBaseCache.size > 10000) {
-                const firstKey = treeBaseCache.keys().next().value;
-                if (firstKey) treeBaseCache.delete(firstKey);
+                treeBaseCache.clear();
             }
             return y;
         }
@@ -83,39 +92,55 @@ export function getTreeBaseY(worldX: number, worldZ: number) {
 
 export const blockEdits = new Map<string, number>();
 
+const blockCache = new Map<string, number>();
+
 export function getBlock(worldX: number, worldY: number, worldZ: number) {
     const key = `${worldX},${worldY},${worldZ}`;
     if (blockEdits.has(key)) {
         return blockEdits.get(key)!;
     }
 
-    if (getBaseBlock(worldX, worldY, worldZ) === 1) return 1; // 1 = Grass/Dirt
-    
-    // Check local neighborhood for tree spawn
-    for (let dx = -2; dx <= 2; dx++) {
-        for (let dz = -2; dz <= 2; dz++) {
-            const tx = worldX + dx;
-            const tz = worldZ + dz;
-            
-            // 2% chance of tree per column
-            if (hashCoordinates(tx, tz) < 0.02) {
-                const ty = getTreeBaseY(tx, tz);
-                if (ty > -50) {
-                    // Log: 5 blocks tall
-                    if (dx === 0 && dz === 0 && worldY > ty && worldY <= ty + 5) return 2; // 2 = Log
-                    
-                    // Leaves: spheres around top of tree
-                    if (worldY >= ty + 3 && worldY <= ty + 6) {
-                         const rPart = dx * dx + dz * dz;
-                         if (worldY <= ty + 4 && rPart <= 4) return 3; // 3 = Leaves
-                         if (worldY > ty + 4 && rPart <= 1) return 3;
+    if (blockCache.has(key)) {
+        return blockCache.get(key)!;
+    }
+
+    let result = 0;
+    if (getBaseBlock(worldX, worldY, worldZ) === 1) {
+        result = 1; // 1 = Grass/Dirt
+    } else {
+        // Check local neighborhood for tree spawn
+        let foundTree = false;
+        for (let dx = -2; dx <= 2; dx++) {
+            for (let dz = -2; dz <= 2; dz++) {
+                const tx = worldX + dx;
+                const tz = worldZ + dz;
+                
+                // 2% chance of tree per column
+                if (hashCoordinates(tx, tz) < 0.02) {
+                    const ty = getTreeBaseY(tx, tz);
+                    if (ty > -50) {
+                        // Log: 5 blocks tall
+                        if (dx === 0 && dz === 0 && worldY > ty && worldY <= ty + 5) { result = 2; foundTree = true; break; }
+                        
+                        // Leaves: spheres around top of tree
+                        if (worldY >= ty + 3 && worldY <= ty + 6) {
+                            const rPart = dx * dx + dz * dz;
+                            if (worldY <= ty + 4 && rPart <= 4) { result = 3; foundTree = true; break; }
+                            if (worldY > ty + 4 && rPart <= 1) { result = 3; foundTree = true; break; }
+                        }
                     }
                 }
             }
+            if (foundTree) break;
         }
     }
     
-    return 0; // 0 = Air
+    // limit cache size
+    if (blockCache.size > 20000) {
+        blockCache.clear();
+    }
+    blockCache.set(key, result);
+    return result;
 }
 
 export function getTerrainSurfaceHeight(worldX: number, expectedY: number, worldZ: number) {

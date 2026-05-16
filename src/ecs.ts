@@ -15,17 +15,4 @@ addComponent(world, playerEntity, Position);
 addComponent(world, playerEntity, Velocity);
 addComponent(world, playerEntity, PlayerState);
 
-// 你可以在這裡掛載更多 ECS 系統 (Systems)
-// 比如 movementSystem 會在每一幀執行
-export const movementSystem = (worldToUpdate: any, dt: number) => {
-    // queries in v0.4.0 use query(world, [components])
-    const ents = query(worldToUpdate, [Position, Velocity]);
-    for (let i = 0; i < ents.length; i++) {
-        const eid = ents[i];
-        // 基本的 ECS 移動邏輯，如果有自定義的重力 / 碰撞系統，可以另外實作
-        // Position.x[eid] += Velocity.x[eid] * dt;
-        // Position.y[eid] += Velocity.y[eid] * dt;
-        // Position.z[eid] += Velocity.z[eid] * dt;
-    }
-    return worldToUpdate;
-};
+
