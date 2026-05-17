@@ -37,7 +37,8 @@ export function raycast(
     let prevZ = iz;
 
     while (t <= maxDistance) {
-        if (getBlock(ix, iy, iz) !== 0) {
+        const block = getBlock(ix, iy, iz);
+        if (block !== 0 && block !== 4) {
             return {
                 hit: true,
                 voxel: new THREE.Vector3(ix, iy, iz),

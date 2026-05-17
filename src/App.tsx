@@ -228,7 +228,11 @@ function Player() {
     camera.rotation.set(controlState.look.pitch, controlState.look.yaw, 0);
     
     // Player speed in blocks (meters) per second
-    const speed = 7.0;
+    const isFeetInWaterMovement = getBlock(Math.floor(Position.x[playerEntity]), Math.floor(Position.y[playerEntity] - 1.62), Math.floor(Position.z[playerEntity])) === 4;
+    const isHeadInWaterMovement = getBlock(Math.floor(Position.x[playerEntity]), Math.floor(Position.y[playerEntity] + 0.1), Math.floor(Position.z[playerEntity])) === 4;
+    const inWaterMovement = isFeetInWaterMovement || isHeadInWaterMovement;
+
+    const speed = inWaterMovement ? 3.5 : 7.0;
     
     // Direction based on joystick X and Y
     direction.current.set(controlState.move.x, 0, controlState.move.y);
@@ -265,7 +269,8 @@ function Player() {
         for (let bx = minX; bx <= maxX; bx++) {
             for (let by = minY; by <= maxY; by++) {
                 for (let bz = minZ; bz <= maxZ; bz++) {
-                    if (getBlock(bx, by, bz) !== 0) return true;
+                    const block = getBlock(bx, by, bz);
+                    if (block !== 0 && block !== 4) return true;
                 }
             }
         }
@@ -289,11 +294,26 @@ function Player() {
     }
     
     // Apply Gravity and Vertical Velocity
-    const GRAVITY = 25;
+    const isFeetInWater = getBlock(Math.floor(Position.x[playerEntity]), Math.floor(Position.y[playerEntity] - 1.62), Math.floor(Position.z[playerEntity])) === 4;
+    const isHeadInWater = getBlock(Math.floor(Position.x[playerEntity]), Math.floor(Position.y[playerEntity] + 0.1), Math.floor(Position.z[playerEntity])) === 4;
+    const inWater = isFeetInWater || isHeadInWater;
+
+    const GRAVITY = inWater ? 5 : 25;
     const JUMP_FORCE = 8.5;
+    const terminalVelocity = inWater ? -3 : -30;
     
     Velocity.y[playerEntity] -= GRAVITY * dt;
-    if (Velocity.y[playerEntity] < -30) Velocity.y[playerEntity] = -30;
+    if (inWater && Velocity.y[playerEntity] < terminalVelocity) {
+        Velocity.y[playerEntity] += 20 * dt; // Decelerate in water
+        if (Velocity.y[playerEntity] > terminalVelocity) Velocity.y[playerEntity] = terminalVelocity;
+    } else if (!inWater && Velocity.y[playerEntity] < terminalVelocity) {
+        Velocity.y[playerEntity] = terminalVelocity;
+    }
+
+    if (inWater && controlState.jump) {
+        Velocity.y[playerEntity] += 15 * dt;
+        if (Velocity.y[playerEntity] > 4) Velocity.y[playerEntity] = 4;
+    }
     
     let tempY = Velocity.y[playerEntity] * dt;
 
@@ -305,7 +325,7 @@ function Player() {
         const hitBlockY = Math.floor(targetFeetY + 0.5 - EPSILON);
         Position.y[playerEntity] = hitBlockY + 0.5 + 1.62;
         
-        if (controlState.jump) {
+        if (controlState.jump && !inWater) {
             Velocity.y[playerEntity] = JUMP_FORCE;
         }
     } else if (Velocity.y[playerEntity] > 0 && checkAABB(0, tempY, 0)) {
@@ -375,7 +395,16 @@ const useGameTextures = () => {
             }
         });
 
-        return { grass, log, leaves };
+        const water = createTex(ctx => {
+            ctx.fillStyle = 'rgba(40, 100, 200, 0.8)'; // Semi-transparent blue
+            ctx.fillRect(0, 0, 16, 16);
+            ctx.fillStyle = 'rgba(60, 120, 220, 0.8)';
+            for(let i=0; i<30; i++){
+                ctx.fillRect(Math.floor(Math.random()*16), Math.floor(Math.random()*16), 2, 1);
+            }
+        });
+
+        return { grass, log, leaves, water };
     }, []);
 };
 
@@ -400,7 +429,7 @@ function SunLight() {
 }
 
 function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: number; textures: any }) {
-    const [geometries, setGeometries] = useState<{ grass: THREE.BufferGeometry, log: THREE.BufferGeometry, leaves: THREE.BufferGeometry } | null>(null);
+    const [geometries, setGeometries] = useState<{ grass: THREE.BufferGeometry, log: THREE.BufferGeometry, leaves: THREE.BufferGeometry, water: THREE.BufferGeometry } | null>(null);
     const [rev, setRev] = useState(0);
 
     useEffect(() => {
@@ -435,6 +464,7 @@ function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: numbe
                 grass: createGeo(data.grass) as THREE.BufferGeometry,
                 log: createGeo(data.log) as THREE.BufferGeometry,
                 leaves: createGeo(data.leaves) as THREE.BufferGeometry,
+                water: createGeo(data.water) as THREE.BufferGeometry,
             });
         });
 
@@ -449,6 +479,7 @@ function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: numbe
                 if (geometries.grass) geometries.grass.dispose();
                 if (geometries.log) geometries.log.dispose();
                 if (geometries.leaves) geometries.leaves.dispose();
+                if (geometries.water) geometries.water.dispose();
             }
         };
     }, [geometries]);
@@ -470,6 +501,11 @@ function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: numbe
             {geometries.leaves && (
                 <mesh geometry={geometries.leaves} frustumCulled={true}>
                     <meshLambertMaterial map={textures.leaves} transparent={true} alphaTest={0.1} />
+                </mesh>
+            )}
+            {geometries.water && (
+                <mesh geometry={geometries.water} frustumCulled={true}>
+                    <meshLambertMaterial map={textures.water} transparent={true} opacity={0.8} alphaTest={0.01} depthWrite={false} color="#aaddff" />
                 </mesh>
             )}
         </group>

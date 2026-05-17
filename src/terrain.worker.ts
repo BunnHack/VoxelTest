@@ -53,7 +53,8 @@ self.onmessage = (e) => {
     const typeData: Record<number, { positions: number[], normals: number[], uvs: number[], indices: number[], ndx: number }> = {
         1: { positions: [], normals: [], uvs: [], indices: [], ndx: 0 },
         2: { positions: [], normals: [], uvs: [], indices: [], ndx: 0 },
-        3: { positions: [], normals: [], uvs: [], indices: [], ndx: 0 }
+        3: { positions: [], normals: [], uvs: [], indices: [], ndx: 0 },
+        4: { positions: [], normals: [], uvs: [], indices: [], ndx: 0 }
     };
 
     for (let lx = 0; lx < CHUNK_SIZE; lx++) {
@@ -75,11 +76,14 @@ self.onmessage = (e) => {
                     const nworldZ = worldZ + dir[2];
                     
                     const neighborId = getBlock(nworldX, nworldY, nworldZ);
-                    // Transparent block check: Leaves. If neighbor is leaves, and we are leaves, skip face.
-                    // If we are solid, and neighbor is leaves, draw face.
-                    if (neighborId !== 0 && !(blockId !== 3 && neighborId === 3)) {
-                        // In simple opaque scenarios:
-                        continue;
+                    
+                    if (neighborId !== 0) {
+                        const isNeighborTransparent = neighborId === 3 || neighborId === 4;
+                        if (!isNeighborTransparent) {
+                            continue;
+                        } else if (neighborId === blockId) {
+                            continue;
+                        }
                     }
 
                     const px = cx * CHUNK_SIZE + lx - 0.5;
@@ -119,6 +123,7 @@ self.onmessage = (e) => {
     finalizeBuffer("grass", 1);
     finalizeBuffer("log", 2);
     finalizeBuffer("leaves", 3);
+    finalizeBuffer("water", 4);
 
     (self as unknown as Worker).postMessage(response, transferList);
 };
