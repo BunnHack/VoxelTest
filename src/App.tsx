@@ -2,19 +2,27 @@ import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Sky } from '@react-three/drei';
 import * as THREE from 'three';
-import { CHUNK_SIZE, RENDER_DISTANCE, getTerrainSurfaceHeight, getBlock } from './utils';
+import { CHUNK_SIZE, RENDER_DISTANCE, getTerrainSurfaceHeight, getBlock, getBaseHeight } from './utils';
 import { terrainWorkerManager } from './terrainWorkerManager';
 import { raycast } from './voxelRaycaster';
 import { setBlockMain, chunkEvents } from './playerActions';
 import { world, playerEntity, Position, Velocity, PlayerState } from './ecs';
+import GUI from 'lil-gui';
 
 // --- State and Handlers ---
 
 export const controlState = {
   move: { x: 0, y: 0 },
   look: { yaw: 0, pitch: -0.3 }, // start looking slightly down
-  jump: false
+  jump: false,
+  spectatorMove: { up: false, down: false }
 };
+
+export const gameSettings = {
+  spectatorMode: false,
+  showCaveEntrances: false
+};
+
 
 function TouchLookArea() {
   const pointerDown = useRef(false);
@@ -232,7 +240,7 @@ function Player() {
     const isHeadInWaterMovement = getBlock(Math.floor(Position.x[playerEntity]), Math.floor(Position.y[playerEntity] + 0.1), Math.floor(Position.z[playerEntity])) === 4;
     const inWaterMovement = isFeetInWaterMovement || isHeadInWaterMovement;
 
-    const speed = inWaterMovement ? 3.5 : 7.0;
+    const speed = gameSettings.spectatorMode ? 25.0 : (inWaterMovement ? 3.5 : 7.0);
     
     // Direction based on joystick X and Y
     direction.current.set(controlState.move.x, 0, controlState.move.y);
@@ -255,6 +263,8 @@ function Player() {
     const EPSILON = 0.001;
 
     const checkAABB = (dx: number, dy: number, dz: number) => {
+        if (gameSettings.spectatorMode) return false;
+        
         const x = Position.x[playerEntity] + dx;
         const feetY = Position.y[playerEntity] + dy - 1.62;
         const z = Position.z[playerEntity] + dz;
@@ -298,47 +308,57 @@ function Player() {
     const isHeadInWater = getBlock(Math.floor(Position.x[playerEntity]), Math.floor(Position.y[playerEntity] + 0.1), Math.floor(Position.z[playerEntity])) === 4;
     const inWater = isFeetInWater || isHeadInWater;
 
-    const GRAVITY = inWater ? 5 : 25;
-    const JUMP_FORCE = 8.5;
-    const terminalVelocity = inWater ? -3 : -30;
-    
-    Velocity.y[playerEntity] -= GRAVITY * dt;
-    if (inWater && Velocity.y[playerEntity] < terminalVelocity) {
-        Velocity.y[playerEntity] += 20 * dt; // Decelerate in water
-        if (Velocity.y[playerEntity] > terminalVelocity) Velocity.y[playerEntity] = terminalVelocity;
-    } else if (!inWater && Velocity.y[playerEntity] < terminalVelocity) {
-        Velocity.y[playerEntity] = terminalVelocity;
-    }
-
-    if (inWater && controlState.jump) {
-        Velocity.y[playerEntity] += 15 * dt;
-        if (Velocity.y[playerEntity] > 4) Velocity.y[playerEntity] = 4;
-    }
-    
-    let tempY = Velocity.y[playerEntity] * dt;
-
-    // Vertical Collision
-    if (Velocity.y[playerEntity] <= 0 && checkAABB(0, tempY, 0)) {
-        // Hit ground
+    if (gameSettings.spectatorMode) {
+        // Vertical spectator movement
         Velocity.y[playerEntity] = 0;
-        const targetFeetY = Position.y[playerEntity] + tempY - 1.62;
-        const hitBlockY = Math.floor(targetFeetY + 0.5 - EPSILON);
-        Position.y[playerEntity] = hitBlockY + 0.5 + 1.62;
+        if (controlState.spectatorMove.up) Velocity.y[playerEntity] = speed;
+        if (controlState.spectatorMove.down) Velocity.y[playerEntity] = -speed;
+        Position.y[playerEntity] += Velocity.y[playerEntity] * dt;
         
-        if (controlState.jump && !inWater) {
-            Velocity.y[playerEntity] = JUMP_FORCE;
-        }
-    } else if (Velocity.y[playerEntity] > 0 && checkAABB(0, tempY, 0)) {
-        // Hit ceiling
-        Velocity.y[playerEntity] = 0;
-        const targetHeadY = Position.y[playerEntity] + tempY - 1.62 + PLAYER_HEIGHT;
-        const hitBlockY = Math.floor(targetHeadY + 0.5 + EPSILON);
-        Position.y[playerEntity] = hitBlockY - 0.5 - PLAYER_HEIGHT + 1.62;
+        // Also allow looking directly where moving vertically if they point camera up/down
+        const yDir = -Math.sin(controlState.look.pitch); // if looking down, goes down
+        // Optional: incorporate pitch into forward speed but we keep it simple with Space/Shift
     } else {
-        Position.y[playerEntity] += tempY;
+        const GRAVITY = inWater ? 5 : 25;
+        const JUMP_FORCE = 8.5;
+        const terminalVelocity = inWater ? -3 : -30;
+        
+        Velocity.y[playerEntity] -= GRAVITY * dt;
+        if (inWater && Velocity.y[playerEntity] < terminalVelocity) {
+            Velocity.y[playerEntity] += 20 * dt; // Decelerate in water
+            if (Velocity.y[playerEntity] > terminalVelocity) Velocity.y[playerEntity] = terminalVelocity;
+        } else if (!inWater && Velocity.y[playerEntity] < terminalVelocity) {
+            Velocity.y[playerEntity] = terminalVelocity;
+        }
+
+        if (inWater && controlState.jump) {
+            Velocity.y[playerEntity] += 15 * dt;
+            if (Velocity.y[playerEntity] > 4) Velocity.y[playerEntity] = 4;
+        }
+        
+        let tempY = Velocity.y[playerEntity] * dt;
+
+        // Vertical Collision
+        if (Velocity.y[playerEntity] <= 0 && checkAABB(0, tempY, 0)) {
+            // Hit ground
+            Velocity.y[playerEntity] = 0;
+            const targetFeetY = Position.y[playerEntity] + tempY - 1.62;
+            const hitBlockY = Math.floor(targetFeetY + 0.5 - EPSILON);
+            Position.y[playerEntity] = hitBlockY + 0.5 + 1.62;
+            
+            if (controlState.jump && !inWater) {
+                Velocity.y[playerEntity] = JUMP_FORCE;
+            }
+        } else if (Velocity.y[playerEntity] > 0 && checkAABB(0, tempY, 0)) {
+            // Hit ceiling
+            Velocity.y[playerEntity] = 0;
+            const targetHeadY = Position.y[playerEntity] + tempY - 1.62 + PLAYER_HEIGHT;
+            const hitBlockY = Math.floor(targetHeadY + 0.5 + EPSILON);
+            Position.y[playerEntity] = hitBlockY - 0.5 - PLAYER_HEIGHT + 1.62;
+        } else {
+            Position.y[playerEntity] += tempY;
+        }
     }
-
-
 
     // Sync back to camera
     camera.position.set(Position.x[playerEntity], Position.y[playerEntity], Position.z[playerEntity]);
@@ -347,7 +367,7 @@ function Player() {
   return null;
 }
 
-const useGameTextures = () => {
+const useGameMaterials = () => {
     return useMemo(() => {
         const createTex = (drawCb: (ctx: CanvasRenderingContext2D) => void) => {
             const canvas = document.createElement('canvas');
@@ -365,7 +385,7 @@ const useGameTextures = () => {
             return tex;
         };
 
-        const grass = createTex(ctx => {
+        const grassTex = createTex(ctx => {
             ctx.fillStyle = '#5c9e3b';
             ctx.fillRect(0, 0, 16, 16);
             for(let i=0; i<80; i++){
@@ -374,7 +394,7 @@ const useGameTextures = () => {
             }
         });
 
-        const log = createTex(ctx => {
+        const logTex = createTex(ctx => {
             ctx.fillStyle = '#6b4d32';
             ctx.fillRect(0, 0, 16, 16);
             for(let i=0; i<100; i++){
@@ -383,7 +403,7 @@ const useGameTextures = () => {
             }
         });
 
-        const leaves = createTex(ctx => {
+        const leavesTex = createTex(ctx => {
             ctx.fillStyle = '#3a6626';
             ctx.fillRect(0, 0, 16, 16);
             for(let i=0; i<120; i++){
@@ -395,8 +415,8 @@ const useGameTextures = () => {
             }
         });
 
-        const water = createTex(ctx => {
-            ctx.fillStyle = 'rgba(40, 100, 200, 0.8)'; // Semi-transparent blue
+        const waterTex = createTex(ctx => {
+            ctx.fillStyle = 'rgba(40, 100, 200, 0.8)';
             ctx.fillRect(0, 0, 16, 16);
             ctx.fillStyle = 'rgba(60, 120, 220, 0.8)';
             for(let i=0; i<30; i++){
@@ -404,7 +424,7 @@ const useGameTextures = () => {
             }
         });
 
-        const sand = createTex(ctx => {
+        const sandTex = createTex(ctx => {
             ctx.fillStyle = '#d9c47a';
             ctx.fillRect(0, 0, 16, 16);
             for (let i = 0; i < 60; i++) {
@@ -413,7 +433,13 @@ const useGameTextures = () => {
             }
         });
 
-        return { grass, log, leaves, water, sand };
+        return {
+            grass: new THREE.MeshLambertMaterial({ map: grassTex }),
+            log: new THREE.MeshLambertMaterial({ map: logTex }),
+            leaves: new THREE.MeshLambertMaterial({ map: leavesTex, transparent: true, alphaTest: 0.1 }),
+            water: new THREE.MeshLambertMaterial({ map: waterTex, transparent: true, opacity: 0.8, alphaTest: 0.01, depthWrite: false, color: "#aaddff" }),
+            sand: new THREE.MeshLambertMaterial({ map: sandTex })
+        };
     }, []);
 };
 
@@ -437,7 +463,7 @@ function SunLight() {
   );
 }
 
-function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: number; textures: any }) {
+function ChunkMesh({ cx, cy, cz, materials }: { cx: number; cy: number; cz: number; materials: any }) {
     const [geometries, setGeometries] = useState<{ grass: THREE.BufferGeometry, log: THREE.BufferGeometry, leaves: THREE.BufferGeometry, water: THREE.BufferGeometry, sand: THREE.BufferGeometry } | null>(null);
     const [rev, setRev] = useState(0);
 
@@ -500,40 +526,30 @@ function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: numbe
     return (
         <group>
             {geometries.grass && (
-                <mesh geometry={geometries.grass} frustumCulled={true}>
-                    <meshLambertMaterial map={textures.grass} />
-                </mesh>
+                <mesh geometry={geometries.grass} material={materials.grass} frustumCulled={true} />
             )}
             {geometries.sand && (
-                <mesh geometry={geometries.sand} frustumCulled={true}>
-                    <meshLambertMaterial map={textures.sand} />
-                </mesh>
+                <mesh geometry={geometries.sand} material={materials.sand} frustumCulled={true} />
             )}
             {geometries.log && (
-                <mesh geometry={geometries.log} frustumCulled={true}>
-                    <meshLambertMaterial map={textures.log} />
-                </mesh>
+                <mesh geometry={geometries.log} material={materials.log} frustumCulled={true} />
             )}
             {geometries.leaves && (
-                <mesh geometry={geometries.leaves} frustumCulled={true}>
-                    <meshLambertMaterial map={textures.leaves} transparent={true} alphaTest={0.1} />
-                </mesh>
+                <mesh geometry={geometries.leaves} material={materials.leaves} frustumCulled={true} />
             )}
             {geometries.water && (
-                <mesh geometry={geometries.water} frustumCulled={true}>
-                    <meshLambertMaterial map={textures.water} transparent={true} opacity={0.8} alphaTest={0.01} depthWrite={false} color="#aaddff" />
-                </mesh>
+                <mesh geometry={geometries.water} material={materials.water} frustumCulled={true} />
             )}
         </group>
     );
 }
 
-function Chunk({ x, y, z, textures }: { x: number; y: number; z: number; textures: any }) {
-    return <ChunkMesh cx={x} cy={y} cz={z} textures={textures} />;
+function Chunk({ x, y, z, materials }: { x: number; y: number; z: number; materials: any }) {
+    return <ChunkMesh cx={x} cy={y} cz={z} materials={materials} />;
 }
 
 function Terrain() {
-  const textures = useGameTextures();
+  const materials = useGameMaterials();
 
   const [chunks, setChunks] = useState<{ x: number; y: number; z: number }[]>([]);
   const lastPos = useRef({ cx: Infinity, cy: Infinity, cz: Infinity });
@@ -560,13 +576,127 @@ function Terrain() {
   return (
     <group>
       {chunks.map((c) => (
-        <Chunk key={`${c.x},${c.y},${c.z}`} x={c.x} y={c.y} z={c.z} textures={textures} />
+        <Chunk key={`${c.x},${c.y},${c.z}`} x={c.x} y={c.y} z={c.z} materials={materials} />
       ))}
     </group>
   );
 }
 
+function CaveEntranceHighlighter() {
+    const meshRef = useRef<THREE.InstancedMesh>(null);
+    const [entrances, setEntrances] = useState<THREE.Vector3[]>([]);
+    
+    useEffect(() => {
+        if (!gameSettings.showCaveEntrances) {
+            setEntrances([]);
+            return;
+        }
+
+        const interval = setInterval(() => {
+            if (!gameSettings.showCaveEntrances) return;
+
+            const px = Math.floor(Position.x[playerEntity]);
+            const pz = Math.floor(Position.z[playerEntity]);
+            
+            const found: THREE.Vector3[] = [];
+            const radius = 48; // scan radius
+            
+            // simple scan
+            for (let dx = -radius; dx <= radius; dx += 2) {
+                for (let dz = -radius; dz <= radius; dz += 2) {
+                    const wx = px + dx;
+                    const wz = pz + dz;
+                    
+                    const bh = Math.floor(getBaseHeight(wx, wz));
+                    
+                    // A cave entrance is where the block at baseHeight is air
+                    // and it goes deeper (e.g. bh-1 is also air)
+                    const blockSurface = getBlock(wx, bh, wz);
+                    const blockBelow1 = getBlock(wx, bh - 1, wz);
+                    const blockBelow2 = getBlock(wx, bh - 2, wz);
+                    const blockBelow3 = getBlock(wx, bh - 3, wz);
+                    const blockBelow4 = getBlock(wx, bh - 4, wz);
+
+                    if (blockSurface === 0 && blockBelow1 === 0 && (blockBelow2 === 0 || blockBelow3 === 0 || blockBelow4 === 0)) {
+                        found.push(new THREE.Vector3(wx, bh, wz));
+                    }
+                }
+            }
+            if (found.length > 0) {
+                console.log(`Found ${found.length} cave entrances`, found);
+            }
+            setEntrances(found);
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [gameSettings.showCaveEntrances]);
+
+    useEffect(() => {
+        if (meshRef.current) {
+            const dummy = new THREE.Object3D();
+            entrances.forEach((pos, i) => {
+                dummy.position.copy(pos);
+                dummy.updateMatrix();
+                meshRef.current!.setMatrixAt(i, dummy.matrix);
+            });
+            meshRef.current.count = entrances.length;
+            meshRef.current.instanceMatrix.needsUpdate = true;
+        }
+    }, [entrances]);
+
+    if (!gameSettings.showCaveEntrances || entrances.length === 0) return null;
+
+    return (
+        <instancedMesh ref={meshRef} args={[undefined, undefined, 2000]} frustumCulled={false}>
+            <boxGeometry args={[1.1, 8.1, 1.1]} />
+            <meshBasicMaterial color="#ff00ff" wireframe transparent opacity={0.8} />
+        </instancedMesh>
+    );
+}
+
+function CoordinateOverlay() {
+    const coordsRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        let handle: number;
+        const updateCoords = () => {
+            if (coordsRef.current) {
+                const x = Position.x[playerEntity].toFixed(1);
+                const y = Position.y[playerEntity].toFixed(1);
+                const z = Position.z[playerEntity].toFixed(1);
+                coordsRef.current.innerText = `X: ${x} Y: ${y} Z: ${z}`;
+            }
+            handle = requestAnimationFrame(updateCoords);
+        };
+        handle = requestAnimationFrame(updateCoords);
+        return () => cancelAnimationFrame(handle);
+    }, []);
+
+    return (
+        <div 
+            ref={coordsRef}
+            className="absolute top-4 left-4 text-white font-mono bg-black/50 p-2 rounded z-50 pointer-events-none"
+        >
+            X: 0.0 Y: 0.0 Z: 0.0
+        </div>
+    );
+}
+
 export default function App() {
+  const [, forceRender] = useState(0);
+
+  useEffect(() => {
+    const gui = new GUI();
+    gui.add(gameSettings, 'spectatorMode').name('Spectator Mode').onChange(() => {
+      forceRender(x => x + 1);
+    });
+    gui.add(gameSettings, 'showCaveEntrances').name('Show Cave Entrances').onChange(() => {
+      forceRender(x => x + 1); // Trigger React re-render when this changes
+    });
+    return () => {
+      gui.destroy();
+    };
+  }, []);
+
   useEffect(() => {
      const onKeyDown = (e: KeyboardEvent) => {
          switch (e.code) {
@@ -574,7 +704,13 @@ export default function App() {
              case 'KeyS': controlState.move.y = 1; break;
              case 'KeyA': controlState.move.x = -1; break;
              case 'KeyD': controlState.move.x = 1; break;
-             case 'Space': controlState.jump = true; break;
+             case 'Space': 
+               controlState.jump = true; 
+               controlState.spectatorMove.up = true;
+               break;
+             case 'ShiftLeft':
+               controlState.spectatorMove.down = true;
+               break;
          }
      };
      const onKeyUp = (e: KeyboardEvent) => {
@@ -583,7 +719,13 @@ export default function App() {
              case 'KeyS': if ((e.code === 'KeyW' && controlState.move.y < 0) || (e.code === 'KeyS' && controlState.move.y > 0)) controlState.move.y = 0; break;
              case 'KeyA':
              case 'KeyD': if ((e.code === 'KeyA' && controlState.move.x < 0) || (e.code === 'KeyD' && controlState.move.x > 0)) controlState.move.x = 0; break;
-             case 'Space': controlState.jump = false; break;
+             case 'Space': 
+               controlState.jump = false; 
+               controlState.spectatorMove.up = false;
+               break;
+             case 'ShiftLeft':
+               controlState.spectatorMove.down = false;
+               break;
          }
      };
      window.addEventListener('keydown', onKeyDown);
@@ -596,7 +738,8 @@ export default function App() {
 
   return (
     <div className="w-screen h-screen bg-sky-200 overflow-hidden relative">
-      <div className="absolute top-4 left-4 z-30 bg-black/60 border-2 border-zinc-500 backdrop-blur-sm px-4 py-2 shadow-sm select-none pointer-events-none font-mono text-white">
+      <CoordinateOverlay />
+      <div className="absolute top-20 left-4 z-30 bg-black/60 border-2 border-zinc-500 backdrop-blur-sm px-4 py-2 shadow-sm select-none pointer-events-none font-mono text-white">
         <h1 className="font-bold mb-1">Minecraft Baseplate</h1>
         <p className="text-xs text-zinc-300">
             <strong>Desktop:</strong> WASD to move. Click to lock pointer. Left click break, Right click place.<br/>
@@ -617,17 +760,38 @@ export default function App() {
            onPointerDown={(e) => {
                e.stopPropagation();
                controlState.jump = true;
+               controlState.spectatorMove.up = true;
            }}
            onPointerUp={(e) => {
                e.stopPropagation();
                controlState.jump = false;
+               controlState.spectatorMove.up = false;
            }}
            onPointerCancel={(e) => {
                controlState.jump = false;
+               controlState.spectatorMove.up = false;
            }}
          >
            Jump
          </button>
+         {gameSettings.spectatorMode && (
+           <button 
+             className="w-16 h-16 rounded-full bg-black/40 border-2 border-white/20 text-white font-bold backdrop-blur-md pointer-events-auto active:bg-white/30"
+             onPointerDown={(e) => {
+                 e.stopPropagation();
+                 controlState.spectatorMove.down = true;
+             }}
+             onPointerUp={(e) => {
+                 e.stopPropagation();
+                 controlState.spectatorMove.down = false;
+             }}
+             onPointerCancel={(e) => {
+                 controlState.spectatorMove.down = false;
+             }}
+           >
+             Down
+           </button>
+         )}
          <button 
            className="w-16 h-16 rounded-full bg-black/40 border-2 border-white/20 text-white font-bold backdrop-blur-md pointer-events-auto active:bg-white/30"
            onPointerDown={(e) => {
@@ -664,6 +828,7 @@ export default function App() {
           
           <Terrain />
           <Player />
+          <CaveEntranceHighlighter />
         </Canvas>
       </div>
     </div>

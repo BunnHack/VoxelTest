@@ -87,66 +87,75 @@ export function getDensity(worldX: number, worldY: number, worldZ: number): numb
 }
 
 // ─────────────────────────────────────────────────────────────
-// FIX 2: Spaghetti cave 使用正確方法
-//   - Y 軸壓縮：洞穴傾向水平延伸，像真實的 spaghetti cave
-//   - 閾值從 0.08 提升到 0.13，讓洞穴截面明顯可見（約 2~3 格寬）
-//   - depth guard 從 >8 降到 >3，讓洞口可以自然打穿地表
-// ─────────────────────────────────────────────────────────────
-function sampleCaveNoise(worldX: number, worldY: number, worldZ: number): number {
-    const hScale = 0.045; // 水平頻率
-    const vScale = 0.012; // 更強的垂直壓縮，洞穴更扁平 (符合真實)
+// ── Cave noise functions ─────────────────────────────────────
 
-    const n1 = noise3D(worldX * hScale,          worldY * vScale,          worldZ * hScale);
-    const n2 = noise3D(worldX * hScale + 31337,  worldY * vScale + 31337,  worldZ * hScale + 31337);
+function sampleSpaghettiCave(wx: number, wy: number, wz: number): number {
+    const hScale = 0.043;
+    const vScale = 0.018; // 從 0.012 提高到 0.018
+    // 原因：vScale 太小 → 洞穴太水平，永遠爬不到地表
+    // 0.018 仍然比 hScale 小（保持水平傾向），但能有足夠的垂直分量穿出地表
 
+    // 三軸完全不同的 offset，降低 n1/n2 相關性
+    const n1 = noise3D(wx * hScale,          wy * vScale,          wz * hScale);
+    const n2 = noise3D(wx * hScale + 47.23,  wy * vScale + 91.07,  wz * hScale + 13.84);
     return Math.sqrt(n1 * n1 + n2 * n2);
 }
 
-function sampleRoomNoise(worldX: number, worldY: number, worldZ: number): number {
-    const scale = 0.015;
-    return noise3D(worldX * scale + 1000, worldY * scale + 1000, worldZ * scale + 1000);
+function sampleRoomNoise(wx: number, wy: number, wz: number): number {
+    const hScale = 0.015;
+    const vScale = 0.008; // Y 軸壓縮 → 扁平洞室
+    return noise3D(wx * hScale + 1000, wy * vScale + 1000, wz * hScale + 1000);
+}
+
+// ── depthFactor：完全基於 depthBelow，與絕對 worldY 無關 ──────
+function getCaveDepthFactor(depthBelow: number): number {
+    if (depthBelow <= 0)  return 0;   // 在地表以上，不挖
+    if (depthBelow < 4)   return (depthBelow / 4.0) * 0.5;
+    // 0~4 格：depthFactor 0→0.5
+    // 這樣近地表的洞穴仍然存在，只是稍微縮小
+    // → 形成自然可見的洞口邊緣（不是完全封閉）
+    if (depthBelow < 10)  return 0.5 + (depthBelow - 4) / 6.0 * 0.5;
+    // 4~10 格：depthFactor 0.5→1.0（過渡帶）
+    if (depthBelow <= 45) return 1.0; // 主洞穴層，最密集
+    return Math.max(0.55, 1.0 - (depthBelow - 45) / 35.0); // 極深處略少
 }
 
 export function getBaseBlock(worldX: number, worldY: number, worldZ: number): number {
-    if (worldY < -30) return 1; // 底部永遠是實體石頭
+    if (worldY < -30) return 1;
 
     const isSolid = getDensity(worldX, worldY, worldZ) > 0;
     if (!isSolid) return 0;
 
-    const baseHeight = getBaseHeight(worldX, worldZ);
-    const depthBelow = baseHeight - worldY;
+    const baseHeight  = getBaseHeight(worldX, worldZ);
+    const depthBelow  = baseHeight - worldY;
+    const depthFactor = getCaveDepthFactor(depthBelow);
 
-    const caveVal = sampleCaveNoise(worldX, worldY, worldZ);
-    const roomVal = sampleRoomNoise(worldX, worldY, worldZ);
+    // depthFactor=0 → 地表以上，直接返回實體
+    if (depthFactor <= 0) return 1;
 
-    // 洞穴密度分布 (y=5 到 -20 最密集)
-    let depthFactor = 1.0;
-    if (worldY > 5) {
-        depthFactor = Math.max(0.2, 1.0 - (worldY - 5) / 15.0); 
-    } else if (worldY < -20) {
-        depthFactor = Math.max(0.3, 1.0 - (-20 - worldY) / 10.0);
+    // ── 洞穴粗細 noise（修正頻率，避免大範圍死區）──────────
+    const thickMod = noise3D(worldX * 0.03, worldY * 0.02, worldZ * 0.03); // -1 ~ +1
+    // 基礎閾值 0.15，振幅 ±0.04 → 範圍 0.11~0.19
+    // 乘以 depthFactor：近地表時按比例縮小（但不會到 0）
+    const spagThreshold = (0.15 + thickMod * 0.04) * depthFactor;
+
+    // ── Spaghetti cave ───────────────────────────────────────
+    const spagVal = sampleSpaghettiCave(worldX, worldY, worldZ);
+    if (spagVal < spagThreshold) return 0;
+    // 注意：不再有「depthBelow <= 1 縮小閾值」的特殊邏輯
+    // depthFactor 本身已經在近地表自然過渡
+    // → 洞穴在 depthBelow=4~10 的地帶會逐漸收窄，然後打穿地表
+
+    // ── Cave rooms（depthBelow > 18 才出現）──────────────────
+    if (depthBelow > 18) {
+        const roomFactor  = Math.min(1.0, (depthBelow - 18) / 12.0);
+        // depthBelow 18~30：roomFactor 0→1（逐漸出現）
+        const roomThreshold = 0.70 - roomFactor * 0.07; // 0.70→0.63
+        const roomVal = sampleRoomNoise(worldX, worldY, worldZ);
+        if (roomVal > roomThreshold) return 0;
     }
 
-    // 粗細變化
-    const thicknessNoise = noise3D(worldX * 0.01, worldY * 0.01, worldZ * 0.01);
-    const caveThreshold = (0.12 + thicknessNoise * 0.08) * depthFactor;
-    // Room basic threshold is 0.65 (so >0.65 is air). Adjust threshold relative to depth.
-    const roomAirThreshold = 0.65 - (thicknessNoise * 0.1) + ((1.0 - depthFactor) * 0.3);
-
-    let isCave = false;
-    if (caveVal < caveThreshold) isCave = true;
-    if (roomVal > roomAirThreshold) isCave = true;
-
-    if (isCave) {
-        if (depthBelow > 1) {
-            return 0; // 完整洞穴
-        } else if (depthBelow >= 0) {
-            // 在地表的一格內，稍微縮口即可，讓洞穴能自然打穿地表
-            if (caveVal < caveThreshold * 0.6 || roomVal > roomAirThreshold + 0.1) return 0;
-        }
-    }
-
-    return 1; // 實體地塊
+    return 1;
 }
 
 // ─────────────────────────────────────────────────────────────
