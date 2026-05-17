@@ -87,37 +87,30 @@ export function getDensity(worldX: number, worldY: number, worldZ: number): numb
 }
 
 // ─────────────────────────────────────────────────────────────
-// ── Cave noise functions ─────────────────────────────────────
-
+// ── 1. Spaghetti cave noise（不變，參數已是正確的）────────
 function sampleSpaghettiCave(wx: number, wy: number, wz: number): number {
     const hScale = 0.043;
-    const vScale = 0.018; // 從 0.012 提高到 0.018
-    // 原因：vScale 太小 → 洞穴太水平，永遠爬不到地表
-    // 0.018 仍然比 hScale 小（保持水平傾向），但能有足夠的垂直分量穿出地表
-
-    // 三軸完全不同的 offset，降低 n1/n2 相關性
-    const n1 = noise3D(wx * hScale,          wy * vScale,          wz * hScale);
-    const n2 = noise3D(wx * hScale + 47.23,  wy * vScale + 91.07,  wz * hScale + 13.84);
+    const vScale = 0.018;
+    const n1 = noise3D(wx * hScale,         wy * vScale,         wz * hScale);
+    const n2 = noise3D(wx * hScale + 47.23, wy * vScale + 91.07, wz * hScale + 13.84);
     return Math.sqrt(n1 * n1 + n2 * n2);
 }
 
+// ── 2. Room noise（Y 軸壓縮 → 扁平洞室）─────────────────
 function sampleRoomNoise(wx: number, wy: number, wz: number): number {
     const hScale = 0.015;
-    const vScale = 0.008; // Y 軸壓縮 → 扁平洞室
+    const vScale = 0.008;
     return noise3D(wx * hScale + 1000, wy * vScale + 1000, wz * hScale + 1000);
 }
 
-// ── depthFactor：完全基於 depthBelow，與絕對 worldY 無關 ──────
+// ── 3. depthFactor：保護層縮短到 3 格，不再壓縮近地表閾值 ──
 function getCaveDepthFactor(depthBelow: number): number {
-    if (depthBelow <= 0)  return 0;   // 在地表以上，不挖
-    if (depthBelow < 4)   return (depthBelow / 4.0) * 0.5;
-    // 0~4 格：depthFactor 0→0.5
-    // 這樣近地表的洞穴仍然存在，只是稍微縮小
-    // → 形成自然可見的洞口邊緣（不是完全封閉）
-    if (depthBelow < 10)  return 0.5 + (depthBelow - 4) / 6.0 * 0.5;
-    // 4~10 格：depthFactor 0.5→1.0（過渡帶）
-    if (depthBelow <= 45) return 1.0; // 主洞穴層，最密集
-    return Math.max(0.55, 1.0 - (depthBelow - 45) / 35.0); // 極深處略少
+    if (depthBelow <= 0)  return 0;          // 地表以上，不挖
+    if (depthBelow <  3)  return depthBelow / 3.0; // 0→1，只有3格保護層
+    // depthBelow >= 3：完整強度，不再壓縮
+    // → 洞口在距地表 3 格處已是完整寬度，直接打穿地表可見
+    if (depthBelow <= 50) return 1.0;
+    return Math.max(0.6, 1.0 - (depthBelow - 50) / 35.0);
 }
 
 export function getBaseBlock(worldX: number, worldY: number, worldZ: number): number {
@@ -130,28 +123,27 @@ export function getBaseBlock(worldX: number, worldY: number, worldZ: number): nu
     const depthBelow  = baseHeight - worldY;
     const depthFactor = getCaveDepthFactor(depthBelow);
 
-    // depthFactor=0 → 地表以上，直接返回實體
     if (depthFactor <= 0) return 1;
 
-    // ── 洞穴粗細 noise（修正頻率，避免大範圍死區）──────────
-    const thickMod = noise3D(worldX * 0.03, worldY * 0.02, worldZ * 0.03); // -1 ~ +1
-    // 基礎閾值 0.15，振幅 ±0.04 → 範圍 0.11~0.19
-    // 乘以 depthFactor：近地表時按比例縮小（但不會到 0）
-    const spagThreshold = (0.15 + thickMod * 0.04) * depthFactor;
+    // ── FIX CORE：threshold 從 0.15 大幅提升到 0.30 ──────────
+    // thickMod 振幅也從 0.04 提升到 0.07
+    // 最終範圍：(0.30 ± 0.07) × depthFactor = 0.23 ~ 0.37
+    // 對應隧道寬度：~4~6 格（接近 Minecraft 1.12 的效果）
+    const thickMod      = noise3D(worldX * 0.03, worldY * 0.02, worldZ * 0.03);
+    const spagThreshold = (0.30 + thickMod * 0.07) * depthFactor;
 
-    // ── Spaghetti cave ───────────────────────────────────────
     const spagVal = sampleSpaghettiCave(worldX, worldY, worldZ);
     if (spagVal < spagThreshold) return 0;
-    // 注意：不再有「depthBelow <= 1 縮小閾值」的特殊邏輯
-    // depthFactor 本身已經在近地表自然過渡
-    // → 洞穴在 depthBelow=4~10 的地帶會逐漸收窄，然後打穿地表
 
-    // ── Cave rooms（depthBelow > 18 才出現）──────────────────
-    if (depthBelow > 18) {
-        const roomFactor  = Math.min(1.0, (depthBelow - 18) / 12.0);
-        // depthBelow 18~30：roomFactor 0→1（逐漸出現）
-        const roomThreshold = 0.70 - roomFactor * 0.07; // 0.70→0.63
-        const roomVal = sampleRoomNoise(worldX, worldY, worldZ);
+    // ── Cave rooms：threshold 降低 → 洞室更大更明顯 ──────────
+    // 原 0.70→0.63，改為 0.58→0.50
+    // noise3D 輸出 -1~1，> 0.50 的概率約 25%
+    // 洞室截面面積：(1-0.50)/2 × ... ≈ 15~20% 的 blocks 被挖空
+    // → 產生 5~8 格寬的寬闊空間
+    if (depthBelow > 15) {
+        const roomFactor    = Math.min(1.0, (depthBelow - 15) / 10.0);
+        const roomThreshold = 0.58 - roomFactor * 0.08; // 0.58→0.50
+        const roomVal       = sampleRoomNoise(worldX, worldY, worldZ);
         if (roomVal > roomThreshold) return 0;
     }
 
