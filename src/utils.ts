@@ -18,16 +18,60 @@ export const CHUNK_SIZE = 16;
 export const RENDER_DISTANCE = 3;
 
 // ─────────────────────────────────────────────────────────────
-// FIX 1: Terrain density — 減少 3D noise 振幅，防止地表大坑
-//   原: noise3d * 8  →  現: 分層 octave，地表附近 3D noise 趨近於 0
+// 海平面常數 — 統一用這個，不要 hardcode 12
+// ─────────────────────────────────────────────────────────────
+export const SEA_LEVEL = 12;
+
+// ─────────────────────────────────────────────────────────────
+// FIX OCEAN 1: Continentalness noise
+//   極低頻率（0.004）→ 決定大範圍是"海洋"還是"陸地"
+//   輸出 -1.5 ~ +1.5，< -0.15 = 海洋，> 0.2 = 陸地，中間 = 海岸
+// ─────────────────────────────────────────────────────────────
+function getContinentalness(worldX: number, worldZ: number): number {
+    const c0 = noise2D(worldX * 0.004,  worldZ * 0.004);           // 大尺度
+    const c1 = noise2D(worldX * 0.009 + 300, worldZ * 0.009 + 300) * 0.4; // 中尺度修飾
+    return c0 + c1; // ≈ -1.4 ~ +1.4
+}
+
+// ─────────────────────────────────────────────────────────────
+// FIX OCEAN 2: 根據 continentalness 決定地形高度
+//   海洋區: 地形 ≈ SEA_LEVEL - 10 ~ SEA_LEVEL - 4  → 水深 4~10 格
+//   海岸區: 地形 ≈ SEA_LEVEL - 2 ~ SEA_LEVEL + 3   → 沙灘
+//   陸地區: 地形 ≈ SEA_LEVEL + 4 ~ SEA_LEVEL + 20  → 山丘
 // ─────────────────────────────────────────────────────────────
 export function getBaseHeight(worldX: number, worldZ: number): number {
-    const s = 0.02;
-    // 多八度2D，給山丘更自然的輪廓
-    const h0 = noise2D(worldX * s,       worldZ * s)       * 10;
-    const h1 = noise2D(worldX * s * 3,   worldZ * s * 3)   * 4;
-    const h2 = noise2D(worldX * s * 9,   worldZ * s * 9)   * 1.5;
-    return 16 + h0 + h1 + h2;
+    const continental = getContinentalness(worldX, worldZ);
+
+    // 陸地細節 noise（多八度）
+    const s = 0.022;
+    const detail = noise2D(worldX * s, worldZ * s)           * 7
+                 + noise2D(worldX * s * 3, worldZ * s * 3)   * 3
+                 + noise2D(worldX * s * 8, worldZ * s * 8)   * 1.2;
+    // detail ≈ -11.2 ~ +11.2
+
+    if (continental < -0.35) {
+        // ── 深海 ──────────────────────────────────────────────
+        // continental: -1.4 ~ -0.35, t: 0(邊緣) ~ 1(深海)
+        const t = Math.min(1, (continental + 0.35) / -1.05);
+        // 海床高度：SEA_LEVEL-5 (邊緣) → SEA_LEVEL-11 (深海)
+        const floorBase = SEA_LEVEL - 5 - t * 6;
+        return floorBase + detail * 0.25; // 海床非常平坦
+    } else if (continental < 0.1) {
+        // ── 海岸過渡帶 ────────────────────────────────────────
+        // t: 0(靠近深海) ~ 1(靠近陸地)
+        const t = (continental + 0.35) / 0.45;
+        const tSmooth = t * t * (3 - 2 * t); // smoothstep
+        const oceanEdgeHeight = SEA_LEVEL - 4 + detail * 0.4;
+        const landEdgeHeight  = SEA_LEVEL + 4 + detail * 0.8;
+        return oceanEdgeHeight + (landEdgeHeight - oceanEdgeHeight) * tSmooth;
+    } else {
+        // ── 陸地 ──────────────────────────────────────────────
+        // continental: 0.1 ~ 1.4, t: 0 ~ 1
+        const t = Math.min(1, (continental - 0.1) / 1.0);
+        // 越深入內陸，地勢越高（山脈）
+        const heightBoost = t * 8;
+        return SEA_LEVEL + 4 + heightBoost + detail;
+    }
 }
 
 export function getDensity(worldX: number, worldY: number, worldZ: number): number {
@@ -50,13 +94,17 @@ export function getDensity(worldX: number, worldY: number, worldZ: number): numb
 // ─────────────────────────────────────────────────────────────
 function sampleCaveNoise(worldX: number, worldY: number, worldZ: number): number {
     const hScale = 0.045; // 水平頻率
-    const vScale = 0.025; // 垂直頻率更低 → 洞穴水平延伸
+    const vScale = 0.012; // 更強的垂直壓縮，洞穴更扁平 (符合真實)
 
     const n1 = noise3D(worldX * hScale,          worldY * vScale,          worldZ * hScale);
     const n2 = noise3D(worldX * hScale + 31337,  worldY * vScale + 31337,  worldZ * hScale + 31337);
 
-    // sqrt(n1²+n2²) 接近 0 ⟹ 兩個 noise 同時靠近 0 ⟹ 隧道中心
     return Math.sqrt(n1 * n1 + n2 * n2);
+}
+
+function sampleRoomNoise(worldX: number, worldY: number, worldZ: number): number {
+    const scale = 0.015;
+    return noise3D(worldX * scale + 1000, worldY * scale + 1000, worldZ * scale + 1000);
 }
 
 export function getBaseBlock(worldX: number, worldY: number, worldZ: number): number {
@@ -68,22 +116,34 @@ export function getBaseBlock(worldX: number, worldY: number, worldZ: number): nu
     const baseHeight = getBaseHeight(worldX, worldZ);
     const depthBelow = baseHeight - worldY;
 
-    // FIX 2a: 洞穴閾值提高到 0.13（原 0.08），洞穴截面明顯
-    const CAVE_THRESHOLD = 0.13;
     const caveVal = sampleCaveNoise(worldX, worldY, worldZ);
+    const roomVal = sampleRoomNoise(worldX, worldY, worldZ);
 
-    if (caveVal < CAVE_THRESHOLD) {
-        // FIX 2b: depth guard 降到 3，讓洞穴可以自然打出地表洞口
-        // 越接近地表，閾值越收窄（tapering），避免地表破碎
-        if (depthBelow > 8) {
+    // 洞穴密度分布 (y=5 到 -20 最密集)
+    let depthFactor = 1.0;
+    if (worldY > 5) {
+        depthFactor = Math.max(0.2, 1.0 - (worldY - 5) / 15.0); 
+    } else if (worldY < -20) {
+        depthFactor = Math.max(0.3, 1.0 - (-20 - worldY) / 10.0);
+    }
+
+    // 粗細變化
+    const thicknessNoise = noise3D(worldX * 0.01, worldY * 0.01, worldZ * 0.01);
+    const caveThreshold = (0.12 + thicknessNoise * 0.08) * depthFactor;
+    // Room basic threshold is 0.65 (so >0.65 is air). Adjust threshold relative to depth.
+    const roomAirThreshold = 0.65 - (thicknessNoise * 0.1) + ((1.0 - depthFactor) * 0.3);
+
+    let isCave = false;
+    if (caveVal < caveThreshold) isCave = true;
+    if (roomVal > roomAirThreshold) isCave = true;
+
+    if (isCave) {
+        if (depthBelow > 1) {
             return 0; // 完整洞穴
-        } else if (depthBelow > 3) {
-            // 漸變收窄 → 在接近地表的地方形成自然洞口邊緣
-            const t = (depthBelow - 3) / 5.0; // 0→1
-            const taperedThreshold = CAVE_THRESHOLD * t * 0.7;
-            if (caveVal < taperedThreshold) return 0;
+        } else if (depthBelow >= 0) {
+            // 在地表的一格內，稍微縮口即可，讓洞穴能自然打穿地表
+            if (caveVal < caveThreshold * 0.6 || roomVal > roomAirThreshold + 0.1) return 0;
         }
-        // depthBelow <= 3：不挖洞（保護地表結構），但洞口已由上方 >3 處自然形成
     }
 
     return 1; // 實體地塊
@@ -107,6 +167,13 @@ export function getTreeBaseY(worldX: number, worldZ: number): number {
     if (treeBaseCache.has(key)) return treeBaseCache.get(key)!;
 
     const expectedY = getBaseHeight(worldX, worldZ);
+
+    // ── FIX: 海洋/海岸區不種樹 ──
+    const continental = getContinentalness(worldX, worldZ);
+    if (continental < 0.15) {
+        treeBaseCache.set(key, -100);
+        return -100;
+    }
 
     // 只在預期地表附近搜尋，避免找到坑底
     const searchTop = Math.floor(expectedY + 6);
@@ -136,12 +203,19 @@ export function getBlock(worldX: number, worldY: number, worldZ: number): number
     if (blockCache.has(key)) return blockCache.get(key)!;
 
     let result = 0;
+    const baseHeight = getBaseHeight(worldX, worldZ); // 快取一次
 
     if (getBaseBlock(worldX, worldY, worldZ) === 1) {
-        result = 1; // 地塊
+        // ── FIX OCEAN 3: 海底/沙灘用沙 (block 5) ──────────────
+        // 海面下，或海面上 1~2 格（沙灘）的地表頂層用沙
+        const isNearSea = baseHeight < SEA_LEVEL + 3;
+        if (isNearSea) {
+            result = 5; // sand
+        } else {
+            result = 1; // grass/dirt
+        }
     } else {
-        // 樹木生成
-        let foundTree = false;
+        // ── 樹木生成 ──────────────────────────────────────────
         outer:
         for (let dx = -2; dx <= 2; dx++) {
             for (let dz = -2; dz <= 2; dz++) {
@@ -154,26 +228,33 @@ export function getBlock(worldX: number, worldY: number, worldZ: number): number
 
                     // 樹幹：5格高
                     if (dx === 0 && dz === 0 && worldY > ty && worldY <= ty + 5) {
-                        result = 2; foundTree = true; break outer;
+                        result = 2; break outer;
                     }
 
                     // 葉子：圓球形狀
                     if (worldY >= ty + 3 && worldY <= ty + 7) {
                         const rPart = dx * dx + dz * dz;
                         const relY = worldY - ty;
-                        if (relY <= 5 && rPart <= 4)      { result = 3; foundTree = true; break outer; }
-                        if (relY >= 5 && relY <= 7 && rPart <= 1) { result = 3; foundTree = true; break outer; }
+                        if (relY <= 5 && rPart <= 4)      { result = 3; break outer; }
+                        if (relY >= 5 && relY <= 7 && rPart <= 1) { result = 3; break outer; }
                     }
                 }
             }
         }
+
+        // ── FIX OCEAN 4: 正確的水生成邏輯 ────────────────────
+        // 關鍵：只有當「這一 column 的自然地形高度低於海平面」，
+        // 且此 block 在地表上方 (worldY > baseHeight) 才填水，防止洞穴進水
+        if (result === 0 && worldY <= SEA_LEVEL && worldY > baseHeight) {
+            result = 4; // water
+        }
     }
 
-    if (result === 0 && worldY <= 12) {
-        result = 4; // Water
+    if (blockCache.size > 20000) {
+        // LRU-lite: 刪最舊的 5000 個
+        const iter = blockCache.keys();
+        for (let i = 0; i < 5000; i++) blockCache.delete(iter.next().value);
     }
-
-    if (blockCache.size > 20000) blockCache.clear();
     blockCache.set(key, result);
     return result;
 }

@@ -404,7 +404,16 @@ const useGameTextures = () => {
             }
         });
 
-        return { grass, log, leaves, water };
+        const sand = createTex(ctx => {
+            ctx.fillStyle = '#d9c47a';
+            ctx.fillRect(0, 0, 16, 16);
+            for (let i = 0; i < 60; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? '#c8b468' : '#e8d488';
+                ctx.fillRect(Math.floor(Math.random()*16), Math.floor(Math.random()*16), 1, 1);
+            }
+        });
+
+        return { grass, log, leaves, water, sand };
     }, []);
 };
 
@@ -429,7 +438,7 @@ function SunLight() {
 }
 
 function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: number; textures: any }) {
-    const [geometries, setGeometries] = useState<{ grass: THREE.BufferGeometry, log: THREE.BufferGeometry, leaves: THREE.BufferGeometry, water: THREE.BufferGeometry } | null>(null);
+    const [geometries, setGeometries] = useState<{ grass: THREE.BufferGeometry, log: THREE.BufferGeometry, leaves: THREE.BufferGeometry, water: THREE.BufferGeometry, sand: THREE.BufferGeometry } | null>(null);
     const [rev, setRev] = useState(0);
 
     useEffect(() => {
@@ -465,6 +474,7 @@ function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: numbe
                 log: createGeo(data.log) as THREE.BufferGeometry,
                 leaves: createGeo(data.leaves) as THREE.BufferGeometry,
                 water: createGeo(data.water) as THREE.BufferGeometry,
+                sand: createGeo(data.sand) as THREE.BufferGeometry,
             });
         });
 
@@ -480,6 +490,7 @@ function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: numbe
                 if (geometries.log) geometries.log.dispose();
                 if (geometries.leaves) geometries.leaves.dispose();
                 if (geometries.water) geometries.water.dispose();
+                if (geometries.sand) geometries.sand.dispose();
             }
         };
     }, [geometries]);
@@ -491,6 +502,11 @@ function ChunkMesh({ cx, cy, cz, textures }: { cx: number; cy: number; cz: numbe
             {geometries.grass && (
                 <mesh geometry={geometries.grass} frustumCulled={true}>
                     <meshLambertMaterial map={textures.grass} />
+                </mesh>
+            )}
+            {geometries.sand && (
+                <mesh geometry={geometries.sand} frustumCulled={true}>
+                    <meshLambertMaterial map={textures.sand} />
                 </mesh>
             )}
             {geometries.log && (
