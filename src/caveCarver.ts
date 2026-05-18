@@ -58,7 +58,7 @@ export class CarverSystem {
 
         for (let i = 0; i < count; i++) {
             const startX = scx * 16 + rng.float(0, 16);
-            const startY = rng.int(10, 60);
+            const startY = rng.int(-25, 25);
             const startZ = scz * 16 + rng.float(0, 16);
 
             // Occasional large room replacing the start
@@ -88,7 +88,7 @@ export class CarverSystem {
         // 2. Generate Ravines
         if (rng.chance(0.04)) {
             const startX = scx * 16 + rng.float(0, 16);
-            const startY = rng.int(20, 50);
+            const startY = rng.int(-15, 25);
             const startZ = scz * 16 + rng.float(0, 16);
 
             const yaw = rng.float(0, Math.PI * 2);
@@ -204,48 +204,86 @@ export class CarverSystem {
         return intersectingShapes;
     }
 
-    private lastCx = -999999;
-    private lastCz = -999999;
-    private lastShapes: Ellipsoid[] = [];
+    private maskCache = new Map<string, Uint8Array>();
 
-    public isCarved(wx: number, wy: number, wz: number, baseHeight: number): boolean {
+    public isCarved(wx: number, wy: number, wz: number): boolean {
         const cx = Math.floor(wx / 16);
+        const cy = Math.floor(wy / 16);
         const cz = Math.floor(wz / 16);
         
-        let shapes = this.lastShapes;
-        if (cx !== this.lastCx || cz !== this.lastCz) {
-            shapes = this.getShapesForTargetChunk(cx, cz);
-            this.lastCx = cx;
-            this.lastCz = cz;
-            this.lastShapes = shapes;
-        }
-
-        if (shapes.length === 0) return false;
-
-        const minBreachDepth = 3; 
-
-        for (const s of shapes) {
-            // fast Y bounds check
-            if (wy < s.cy - s.ry || wy > s.cy + s.ry) continue;
-
-            const dx0 = (wx - s.cx) / s.rx;
-            const dy0 = (wy - s.cy) / s.ry;
-            const dz0 = (wz - s.cz) / s.rz;
-
-            if (dx0 * dx0 + dy0 * dy0 + dz0 * dz0 < 1.0) {
-                const depth = baseHeight - wy;
-                
-                // Surface breach prevention
-                if (depth <= minBreachDepth) {
-                    if (baseHeight <= 14) continue; // prevent opening caves under water/beach
-                    const slope = this.getSlope(wx, wz, baseHeight);
-                    if (slope < 3) continue; // too flat to breach, skip carving at surface
-                }
-                
-                return true;
+        const key = `${cx},${cy},${cz}`;
+        let mask = this.maskCache.get(key);
+        if (!mask) {
+            mask = this.generateMask(cx, cy, cz);
+            this.maskCache.set(key, mask);
+            
+            if (this.maskCache.size > 2000) {
+                const iter = this.maskCache.keys();
+                for (let i = 0; i < 500; i++) this.maskCache.delete(iter.next().value!);
             }
         }
-        return false;
+
+        const lx = wx - cx * 16;
+        const ly = wy - cy * 16;
+        const lz = wz - cz * 16;
+        
+        return mask[lx * 256 + ly * 16 + lz] === 1;
+    }
+
+    private generateMask(cx: number, cy: number, cz: number): Uint8Array {
+        const mask = new Uint8Array(4096);
+        const shapes = this.getShapesForTargetChunk(cx, cz);
+        if (shapes.length === 0) return mask;
+
+        const minY = cy * 16;
+        const maxY = minY + 16;
+        
+        const localShapes = shapes.filter(s => 
+            s.cy + s.ry >= minY && s.cy - s.ry <= maxY
+        );
+        if (localShapes.length === 0) return mask;
+
+        const minX = cx * 16;
+        const minZ = cz * 16;
+        const minBreachDepth = 3; 
+
+        for (let lx = 0; lx < 16; lx++) {
+            const wx = minX + lx;
+            for (let lz = 0; lz < 16; lz++) {
+                const wz = minZ + lz;
+                
+                const baseHeight = getBaseHeight(wx, wz);
+                let maxSlope = -1; // compute lazily
+
+                for (let ly = 0; ly < 16; ly++) {
+                    const wy = minY + ly;
+                    
+                    for (const s of localShapes) {
+                        if (wy < s.cy - s.ry || wy > s.cy + s.ry) continue;
+
+                        const dx0 = (wx - s.cx) / s.rx;
+                        const dy0 = (wy - s.cy) / s.ry;
+                        const dz0 = (wz - s.cz) / s.rz;
+
+                        if (dx0 * dx0 + dy0 * dy0 + dz0 * dz0 < 1.0) {
+                            const depth = baseHeight - wy;
+                            
+                            if (depth <= minBreachDepth) {
+                                if (baseHeight <= 14) continue;
+                                if (maxSlope === -1) {
+                                    maxSlope = this.getSlope(wx, wz, baseHeight);
+                                }
+                                if (maxSlope < 3) continue;
+                            }
+                            
+                            mask[lx * 256 + ly * 16 + lz] = 1;
+                            break; 
+                        }
+                    }
+                }
+            }
+        }
+        return mask;
     }
 }
 

@@ -100,7 +100,7 @@ export function getBaseBlock(worldX: number, worldY: number, worldZ: number): nu
     
     if (depthBelow <= 0) return 1;
 
-    if (globalCarver.isCarved(worldX, worldY, worldZ, baseHeight)) {
+    if (globalCarver.isCarved(worldX, worldY, worldZ)) {
         return 0; // inside a cave
     }
 
