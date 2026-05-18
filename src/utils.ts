@@ -87,23 +87,7 @@ export function getDensity(worldX: number, worldY: number, worldZ: number): numb
 }
 
 // ─────────────────────────────────────────────────────────────
-// ── 1. Spaghetti cave noise（不變，參數已是正確的）────────
-function sampleSpaghettiCave(wx: number, wy: number, wz: number): number {
-    const hScale = 0.043;
-    const vScale = 0.018;
-    const n1 = noise3D(wx * hScale,         wy * vScale,         wz * hScale);
-    const n2 = noise3D(wx * hScale + 47.23, wy * vScale + 91.07, wz * hScale + 13.84);
-    return Math.sqrt(n1 * n1 + n2 * n2);
-}
-
-// ── 2. Room noise（Y 軸壓縮 → 扁平洞室）─────────────────
-function sampleRoomNoise(wx: number, wy: number, wz: number): number {
-    const hScale = 0.015;
-    const vScale = 0.008;
-    return noise3D(wx * hScale + 1000, wy * vScale + 1000, wz * hScale + 1000);
-}
-
-// ── 3. Spaghetti Cave Entrance Check ──────────
+import { globalCarver } from './caveCarver';
 
 export function getBaseBlock(worldX: number, worldY: number, worldZ: number): number {
     if (worldY < -30) return 1;
@@ -116,31 +100,8 @@ export function getBaseBlock(worldX: number, worldY: number, worldZ: number): nu
     
     if (depthBelow <= 0) return 1;
 
-    // 洞穴粗細 base
-    const thickMod = noise3D(worldX * 0.03, worldY * 0.02, worldZ * 0.03);
-    const spagBase = 0.31 + thickMod * 0.06;
-    const spagVal  = sampleSpaghettiCave(worldX, worldY, worldZ);
-
-    const entranceMask = noise2D(worldX * 0.028 + 2000, worldZ * 0.028 - 2000);
-
-    // 改善地表洞口：不要縮小半徑，而是用 binary mask 來控制開不開口
-    if (depthBelow < 4) {
-        if (entranceMask < 0.78) return 1; // 大部分地表不開口
-        if (spagVal < Math.max(0.34, spagBase)) return 0; // 一旦開口就夠寬
-    } else {
-        let factor = 1.0;
-        if (depthBelow > 50) {
-            factor = Math.max(0.6, 1.0 - (depthBelow - 50) / 35.0);
-        }
-        if (spagVal < spagBase * factor) return 0;
-    }
-
-    // ── Cave rooms：threshold 降低 → 洞室更大更明顯 ──────────
-    if (depthBelow > 10) {
-        const roomFactor    = Math.min(1.0, (depthBelow - 10) / 10.0);
-        const roomThreshold = 0.58 - roomFactor * 0.08; // 0.58→0.50
-        const roomVal       = sampleRoomNoise(worldX, worldY, worldZ);
-        if (roomVal > roomThreshold) return 0;
+    if (globalCarver.isCarved(worldX, worldY, worldZ, baseHeight)) {
+        return 0; // inside a cave
     }
 
     return 1;
