@@ -1,4 +1,4 @@
-import { getBaseHeight } from './utils';
+import { getBaseHeight, noise2D, SEA_LEVEL } from './utils';
 
 // PRNG for deterministic generation
 function mulberry32(a: number) {
@@ -37,6 +37,20 @@ export class CarverSystem {
         );
     }
 
+    private getSurfaceRoof(shapeType: 'tunnel' | 'room' | 'ravine'): number {
+        if (shapeType === 'tunnel') return 6;
+        if (shapeType === 'room') return 8;
+        if (shapeType === 'ravine') return 10;
+        return 6;
+    }
+
+    private isEntranceCandidate(wx: number, wz: number, baseHeight: number): boolean {
+        if (baseHeight <= SEA_LEVEL + 2) return false;
+        if (this.getSlope(wx, wz, baseHeight) < 5) return false;
+        const n = noise2D(wx * 0.02 + 500, wz * 0.02 - 500);
+        return n > 0.82;
+    }
+
     private generateChunkFeatures(scx: number, scz: number): Ellipsoid[] {
         const key = `${scx},${scz}`;
         if (this.chunkCache.has(key)) return this.chunkCache.get(key)!;
@@ -53,16 +67,18 @@ export class CarverSystem {
 
         // 1. Generate Cave Systems (Tunnels & Rooms)
         let count = 0;
-        if (rng.chance(0.2)) count = rng.int(1, 3); // some chunks have 1-2 systems
-        else if (rng.chance(0.05)) count = rng.int(3, 5); // rare massive chunk systems
+        if (rng.chance(0.1)) count = 1;
+        else if (rng.chance(0.05)) count = 2;
+        else if (rng.chance(0.01)) count = 3;
 
         for (let i = 0; i < count; i++) {
             const startX = scx * 16 + rng.float(0, 16);
-            const startY = rng.int(-25, 25);
+            let startY = rng.int(-28, 8);
             const startZ = scz * 16 + rng.float(0, 16);
 
             // Occasional large room replacing the start
-            if (rng.chance(0.25)) {
+            if (rng.chance(0.15)) {
+                startY = rng.int(-22, 12);
                 const r = rng.float(4, 9);
                 shapes.push({
                     cx: startX, cy: startY, cz: startZ,
@@ -86,9 +102,9 @@ export class CarverSystem {
         }
 
         // 2. Generate Ravines
-        if (rng.chance(0.04)) {
+        if (rng.chance(0.015)) {
             const startX = scx * 16 + rng.float(0, 16);
-            const startY = rng.int(-15, 25);
+            const startY = rng.int(-22, 5);
             const startZ = scz * 16 + rng.float(0, 16);
 
             const yaw = rng.float(0, Math.PI * 2);
@@ -123,7 +139,7 @@ export class CarverSystem {
         if (depth > 2) return;
         
         let branchStep = -1;
-        if (depth === 0) branchStep = rng.int(length / 3, (length * 2) / 3);
+        if (depth === 0 && rng.chance(0.4)) branchStep = rng.int(length / 3, (length * 2) / 3);
 
         let currentYaw = yaw;
         let currentPitch = pitch;
@@ -245,7 +261,6 @@ export class CarverSystem {
 
         const minX = cx * 16;
         const minZ = cz * 16;
-        const minBreachDepth = 3; 
 
         for (let lx = 0; lx < 16; lx++) {
             const wx = minX + lx;
@@ -253,7 +268,7 @@ export class CarverSystem {
                 const wz = minZ + lz;
                 
                 const baseHeight = getBaseHeight(wx, wz);
-                let maxSlope = -1; // compute lazily
+                let entranceStatus = -1; // -1 = unknown, 0 = false, 1 = true
 
                 for (let ly = 0; ly < 16; ly++) {
                     const wy = minY + ly;
@@ -267,13 +282,15 @@ export class CarverSystem {
 
                         if (dx0 * dx0 + dy0 * dy0 + dz0 * dz0 < 1.0) {
                             const depth = baseHeight - wy;
+                            const roof = this.getSurfaceRoof(s.type);
                             
-                            if (depth <= minBreachDepth) {
-                                if (baseHeight <= 14) continue;
-                                if (maxSlope === -1) {
-                                    maxSlope = this.getSlope(wx, wz, baseHeight);
+                            if (depth <= roof) {
+                                if (s.type === 'ravine' && baseHeight <= SEA_LEVEL + 4) continue;
+
+                                if (entranceStatus === -1) {
+                                    entranceStatus = this.isEntranceCandidate(wx, wz, baseHeight) ? 1 : 0;
                                 }
-                                if (maxSlope < 3) continue;
+                                if (entranceStatus === 0) continue;
                             }
                             
                             mask[lx * 256 + ly * 16 + lz] = 1;
