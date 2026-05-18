@@ -74,13 +74,13 @@ export class CarverSystem {
             }
 
             let tunnelCount = 1;
-            if (rng.chance(0.3)) tunnelCount += rng.int(1, 3);
+            if (rng.chance(0.3)) tunnelCount += rng.int(1, 2);
 
             for (let j = 0; j < tunnelCount; j++) {
                 const yaw = rng.float(0, Math.PI * 2);
                 const pitch = rng.float(-0.15, 0.15);
                 const width = rng.float(1.5, 3.5);
-                const length = rng.int(40, 100);
+                const length = rng.int(30, 60);
                 this.carveTunnel(startX, startY, startZ, yaw, pitch, width, length, rng.split(), shapes, 0);
             }
         }
@@ -93,7 +93,7 @@ export class CarverSystem {
 
             const yaw = rng.float(0, Math.PI * 2);
             let pitch = rng.float(-0.05, 0.05);
-            const length = rng.int(60, 110);
+            const length = rng.int(40, 80);
             const baseWidth = rng.float(3, 6);
 
             let wx = startX, wy = startY, wz = startZ;
@@ -161,46 +161,77 @@ export class CarverSystem {
             if (step === branchStep && currentWidth > 1.8) {
                 this.carveTunnel(x, y, z, currentYaw - Math.PI / 2, currentPitch / 3, currentWidth * 0.75, length - step, rng.split(), shapes, depth + 1);
                 this.carveTunnel(x, y, z, currentYaw + Math.PI / 2, currentPitch / 3, currentWidth * 0.75, length - step, rng.split(), shapes, depth + 1);
+                return; // STOP main tunnel from continuing to prevent explosion
             }
             
             if (y < -30 || y > 100) break;
         }
     }
 
+    private targetChunkCache = new Map<string, Ellipsoid[]>();
+
+    public getShapesForTargetChunk(cx: number, cz: number): Ellipsoid[] {
+        const key = `${cx},${cz}`;
+        if (this.targetChunkCache.has(key)) return this.targetChunkCache.get(key)!;
+
+        // Ensure cache limits
+        if (this.targetChunkCache.size > 2000) {
+            const iter = this.targetChunkCache.keys();
+            for (let i = 0; i < 500; i++) this.targetChunkCache.delete(iter.next().value!);
+        }
+
+        const intersectingShapes: Ellipsoid[] = [];
+        
+        // Target chunk AABB bounds
+        const minX = cx * 16;
+        const maxX = minX + 16;
+        const minZ = cz * 16;
+        const maxZ = minZ + 16;
+
+        for (let dx = -3; dx <= 3; dx++) {
+            for (let dz = -3; dz <= 3; dz++) {
+                const shapes = this.generateChunkFeatures(cx + dx, cz + dz);
+                for (const s of shapes) {
+                    if (s.cx + s.rx >= minX && s.cx - s.rx <= maxX &&
+                        s.cz + s.rz >= minZ && s.cz - s.rz <= maxZ) {
+                        intersectingShapes.push(s);
+                    }
+                }
+            }
+        }
+
+        this.targetChunkCache.set(key, intersectingShapes);
+        return intersectingShapes;
+    }
+
     public isCarved(wx: number, wy: number, wz: number, baseHeight: number): boolean {
-        // Tunnels can reach far from source. We search within a 4 chunk radius.
         const cx = Math.floor(wx / 16);
         const cz = Math.floor(wz / 16);
         
+        const shapes = this.getShapesForTargetChunk(cx, cz);
+        if (shapes.length === 0) return false;
+
         const minBreachDepth = 3; 
 
-        for (let dx = -4; dx <= 4; dx++) {
-            for (let dz = -4; dz <= 4; dz++) {
-                const shapes = this.generateChunkFeatures(cx + dx, cz + dz);
-                for (const s of shapes) {
-                    // AABB fast check
-                    if (wx < s.cx - s.rx || wx > s.cx + s.rx || 
-                        wy < s.cy - s.ry || wy > s.cy + s.ry || 
-                        wz < s.cz - s.rz || wz > s.cz + s.rz) {
-                        continue;
-                    }
+        for (const s of shapes) {
+            // fast Y bounds check
+            if (wy < s.cy - s.ry || wy > s.cy + s.ry) continue;
 
-                    const dx0 = (wx - s.cx) / s.rx;
-                    const dy0 = (wy - s.cy) / s.ry;
-                    const dz0 = (wz - s.cz) / s.rz;
+            const dx0 = (wx - s.cx) / s.rx;
+            const dy0 = (wy - s.cy) / s.ry;
+            const dz0 = (wz - s.cz) / s.rz;
 
-                    if (dx0 * dx0 + dy0 * dy0 + dz0 * dz0 < 1.0) {
-                        const depth = baseHeight - wy;
-                        
-                        // Surface breach prevention
-                        if (depth <= minBreachDepth) {
-                            const slope = this.getSlope(wx, wz, baseHeight);
-                            if (slope < 3) continue; // too flat to breach, skip carving at surface
-                        }
-                        
-                        return true;
-                    }
+            if (dx0 * dx0 + dy0 * dy0 + dz0 * dz0 < 1.0) {
+                const depth = baseHeight - wy;
+                
+                // Surface breach prevention
+                if (depth <= minBreachDepth) {
+                    if (baseHeight < 4) continue; // prevent opening caves under water/beach
+                    const slope = this.getSlope(wx, wz, baseHeight);
+                    if (slope < 3) continue; // too flat to breach, skip carving at surface
                 }
+                
+                return true;
             }
         }
         return false;

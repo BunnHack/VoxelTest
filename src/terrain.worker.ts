@@ -1,4 +1,5 @@
 import { getDensity, getBlock, CHUNK_SIZE, blockEdits, SEA_LEVEL } from './utils';
+import { globalCarver } from './caveCarver';
 
 const faceConfig = [
     { dir: [0, 1, 0],  corners: [[0,1,0],[0,1,1],[1,1,1],[1,1,0]] },
@@ -38,12 +39,24 @@ self.onmessage = (e) => {
 
     // 這個 chunk 頂部 Y
     const chunkTopY = (cy + 1) * CHUNK_SIZE;
+    const chunkBotY = cy * CHUNK_SIZE;
 
-    // 如果整個 chunk 都是深地下實體，且頂部遠低於海平面 → skip
     if (minDensity > 10 && cy < -2 && chunkTopY < SEA_LEVEL - 4) {
-        (self as unknown as Worker).postMessage({ id, isEmpty: true });
-        return;
+        // Deep underground, might be solid. Check with carver if there is any cave in this height range.
+        let hasCaveInThisLayer = false;
+        const shapes = (globalCarver as any).getShapesForTargetChunk ? (globalCarver as any).getShapesForTargetChunk(cx, cz) : [];
+        for (const s of shapes) {
+            if (s.cy + s.ry >= chunkBotY && s.cy - s.ry <= chunkTopY) {
+                hasCaveInThisLayer = true;
+                break;
+            }
+        }
+        if (!hasCaveInThisLayer) {
+            (self as unknown as Worker).postMessage({ id, isEmpty: true });
+            return;
+        }
     }
+
     // 如果整個 chunk 在海面以上且地形密度極低 → skip
     if (maxDensity < -40 && cy * CHUNK_SIZE > SEA_LEVEL + 4) {
         (self as unknown as Worker).postMessage({ id, isEmpty: true });
