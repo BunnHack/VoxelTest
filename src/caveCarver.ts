@@ -188,8 +188,8 @@ export class CarverSystem {
         const minZ = cz * 16;
         const maxZ = minZ + 16;
 
-        for (let dx = -3; dx <= 3; dx++) {
-            for (let dz = -3; dz <= 3; dz++) {
+        for (let dx = -6; dx <= 6; dx++) {
+            for (let dz = -6; dz <= 6; dz++) {
                 const shapes = this.generateChunkFeatures(cx + dx, cz + dz);
                 for (const s of shapes) {
                     if (s.cx + s.rx >= minX && s.cx - s.rx <= maxX &&
@@ -204,11 +204,22 @@ export class CarverSystem {
         return intersectingShapes;
     }
 
+    private lastCx = -999999;
+    private lastCz = -999999;
+    private lastShapes: Ellipsoid[] = [];
+
     public isCarved(wx: number, wy: number, wz: number, baseHeight: number): boolean {
         const cx = Math.floor(wx / 16);
         const cz = Math.floor(wz / 16);
         
-        const shapes = this.getShapesForTargetChunk(cx, cz);
+        let shapes = this.lastShapes;
+        if (cx !== this.lastCx || cz !== this.lastCz) {
+            shapes = this.getShapesForTargetChunk(cx, cz);
+            this.lastCx = cx;
+            this.lastCz = cz;
+            this.lastShapes = shapes;
+        }
+
         if (shapes.length === 0) return false;
 
         const minBreachDepth = 3; 
@@ -226,7 +237,7 @@ export class CarverSystem {
                 
                 // Surface breach prevention
                 if (depth <= minBreachDepth) {
-                    if (baseHeight < 4) continue; // prevent opening caves under water/beach
+                    if (baseHeight <= 14) continue; // prevent opening caves under water/beach
                     const slope = this.getSlope(wx, wz, baseHeight);
                     if (slope < 3) continue; // too flat to breach, skip carving at surface
                 }
