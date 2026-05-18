@@ -103,15 +103,7 @@ function sampleRoomNoise(wx: number, wy: number, wz: number): number {
     return noise3D(wx * hScale + 1000, wy * vScale + 1000, wz * hScale + 1000);
 }
 
-// ── 3. depthFactor：保護層縮短到 3 格，不再壓縮近地表閾值 ──
-function getCaveDepthFactor(depthBelow: number): number {
-    if (depthBelow <= 0)  return 0;          // 地表以上，不挖
-    if (depthBelow <  3)  return depthBelow / 3.0; // 0→1，只有3格保護層
-    // depthBelow >= 3：完整強度，不再壓縮
-    // → 洞口在距地表 3 格處已是完整寬度，直接打穿地表可見
-    if (depthBelow <= 50) return 1.0;
-    return Math.max(0.6, 1.0 - (depthBelow - 50) / 35.0);
-}
+// ── 3. Spaghetti Cave Entrance Check ──────────
 
 export function getBaseBlock(worldX: number, worldY: number, worldZ: number): number {
     if (worldY < -30) return 1;
@@ -121,27 +113,31 @@ export function getBaseBlock(worldX: number, worldY: number, worldZ: number): nu
 
     const baseHeight  = getBaseHeight(worldX, worldZ);
     const depthBelow  = baseHeight - worldY;
-    const depthFactor = getCaveDepthFactor(depthBelow);
+    
+    if (depthBelow <= 0) return 1;
 
-    if (depthFactor <= 0) return 1;
+    // 洞穴粗細 base
+    const thickMod = noise3D(worldX * 0.03, worldY * 0.02, worldZ * 0.03);
+    const spagBase = 0.31 + thickMod * 0.06;
+    const spagVal  = sampleSpaghettiCave(worldX, worldY, worldZ);
 
-    // ── FIX CORE：threshold 從 0.15 大幅提升到 0.30 ──────────
-    // thickMod 振幅也從 0.04 提升到 0.07
-    // 最終範圍：(0.30 ± 0.07) × depthFactor = 0.23 ~ 0.37
-    // 對應隧道寬度：~4~6 格（接近 Minecraft 1.12 的效果）
-    const thickMod      = noise3D(worldX * 0.03, worldY * 0.02, worldZ * 0.03);
-    const spagThreshold = (0.30 + thickMod * 0.07) * depthFactor;
+    const entranceMask = noise2D(worldX * 0.028 + 2000, worldZ * 0.028 - 2000);
 
-    const spagVal = sampleSpaghettiCave(worldX, worldY, worldZ);
-    if (spagVal < spagThreshold) return 0;
+    // 改善地表洞口：不要縮小半徑，而是用 binary mask 來控制開不開口
+    if (depthBelow < 4) {
+        if (entranceMask < 0.78) return 1; // 大部分地表不開口
+        if (spagVal < Math.max(0.34, spagBase)) return 0; // 一旦開口就夠寬
+    } else {
+        let factor = 1.0;
+        if (depthBelow > 50) {
+            factor = Math.max(0.6, 1.0 - (depthBelow - 50) / 35.0);
+        }
+        if (spagVal < spagBase * factor) return 0;
+    }
 
     // ── Cave rooms：threshold 降低 → 洞室更大更明顯 ──────────
-    // 原 0.70→0.63，改為 0.58→0.50
-    // noise3D 輸出 -1~1，> 0.50 的概率約 25%
-    // 洞室截面面積：(1-0.50)/2 × ... ≈ 15~20% 的 blocks 被挖空
-    // → 產生 5~8 格寬的寬闊空間
-    if (depthBelow > 15) {
-        const roomFactor    = Math.min(1.0, (depthBelow - 15) / 10.0);
+    if (depthBelow > 10) {
+        const roomFactor    = Math.min(1.0, (depthBelow - 10) / 10.0);
         const roomThreshold = 0.58 - roomFactor * 0.08; // 0.58→0.50
         const roomVal       = sampleRoomNoise(worldX, worldY, worldZ);
         if (roomVal > roomThreshold) return 0;
