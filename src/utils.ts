@@ -34,56 +34,116 @@ function getContinentalness(worldX: number, worldZ: number): number {
 }
 
 // ─────────────────────────────────────────────────────────────
-// FIX OCEAN 2: 根據 continentalness 決定地形高度
-//   海洋區: 地形 ≈ SEA_LEVEL - 10 ~ SEA_LEVEL - 4  → 水深 4~10 格
-//   海岸區: 地形 ≈ SEA_LEVEL - 2 ~ SEA_LEVEL + 3   → 沙灘
-//   陸地區: 地形 ≈ SEA_LEVEL + 4 ~ SEA_LEVEL + 20  → 山丘
+// 1.12 Biome-based Terrain Generation
 // ─────────────────────────────────────────────────────────────
+function getBiomeWeights(x: number, z: number) {
+    const continental = noise2D(x * 0.0025 - 500, z * 0.0025 + 500);
+    const humidity    = noise2D(x * 0.0018 + 300, z * 0.0018 + 300);
+    const mountainness= noise2D(x * 0.0035 + 900, z * 0.0035 - 900);
+
+    const mapP = (v: number, min: number, max: number) => Math.max(0, Math.min(1, (v - min) / (max - min)));
+
+    const wE = mapP(mountainness, 0.35, 0.55);
+    const wP = mapP(continental, 0.15, 0.35) * mapP(-humidity, 0.0, 0.2);
+    const wF = mapP(humidity, 0.25, 0.45);
+    const wR = mapP(continental, 0.05, 0.25);
+
+    const actE = wE;
+    const actP = Math.min(1 - actE, wP);
+    const actF = Math.min(1 - actE - actP, wF);
+    const actR = Math.min(1 - actE - actP - actF, wR);
+    const actPl = Math.max(0, 1 - actE - actP - actF - actR);
+
+    return { extreme: actE, plateau: actP, forest: actF, rolling: actR, plains: actPl };
+}
+
+function getPlainsHeight(x: number, z: number): number {
+    const base = 18;
+    const detail = noise2D(x*0.01, z*0.01) * 2
+                 + noise2D(x*0.03, z*0.03) * 0.8;
+    return base + detail;
+}
+
+function getRollingHillsHeight(x: number, z: number): number {
+    const base = 22;
+    const detail = noise2D(x*0.012, z*0.012) * 4
+                 + noise2D(x*0.035, z*0.035) * 1.5
+                 + noise2D(x*0.08, z*0.08) * 0.5;
+    return base + detail;
+}
+
+function getForestHillsHeight(x: number, z: number): number {
+    const base = 24;
+    const detail = noise2D(x*0.011, z*0.011) * 5
+                 + noise2D(x*0.028, z*0.028) * 2
+                 + noise2D(x*0.07, z*0.07) * 0.8;
+    return base + detail;
+}
+
+function getExtremeHillsHeight(x: number, z: number): number {
+    const base = 30;
+    const macro = noise2D(x*0.006, z*0.006) * 12;
+    const ridge = Math.abs(noise2D(x*0.014, z*0.014)) * 10;
+    const detail= noise2D(x*0.04, z*0.04) * 2;
+    return base + macro + ridge + detail;
+}
+
+function getPlateauHeight(x: number, z: number): number {
+    const raw = 28 + noise2D(x*0.008, z*0.008) * 8;
+    let height = Math.round(raw / 3) * 3;
+    height += noise2D(x*0.05, z*0.05) * 0.8;
+    return height;
+}
+
+function getLandHeight(x: number, z: number, weights: any): number {
+    let h = getPlainsHeight(x, z) * weights.plains +
+            getRollingHillsHeight(x, z) * weights.rolling +
+            getForestHillsHeight(x, z) * weights.forest +
+            getExtremeHillsHeight(x, z) * weights.extreme +
+            getPlateauHeight(x, z) * weights.plateau;
+            
+    const cliffWeight = weights.extreme + weights.plateau;
+    if (cliffWeight > 0.1) {
+        const cliffNoise = noise2D(x*0.02 + 1200, z*0.02 - 1200);
+        if (cliffNoise > 0.55) {
+            h += (cliffNoise - 0.55) * 10 * cliffWeight;
+        }
+    }
+    return h;
+}
+
 export function getBaseHeight(worldX: number, worldZ: number): number {
     const continental = getContinentalness(worldX, worldZ);
 
-    // 陸地細節 noise（多八度）
-    const s = 0.022;
-    const detail = noise2D(worldX * s, worldZ * s)           * 7
-                 + noise2D(worldX * s * 3, worldZ * s * 3)   * 3
-                 + noise2D(worldX * s * 8, worldZ * s * 8)   * 1.2;
-    // detail ≈ -11.2 ~ +11.2
-
     if (continental < -0.35) {
-        // ── 深海 ──────────────────────────────────────────────
-        // continental: -1.4 ~ -0.35, t: 0(邊緣) ~ 1(深海)
+        // Deep Sea
         const t = Math.min(1, (continental + 0.35) / -1.05);
-        // 海床高度：SEA_LEVEL-5 (邊緣) → SEA_LEVEL-11 (深海)
         const floorBase = SEA_LEVEL - 5 - t * 6;
-        return floorBase + detail * 0.25; // 海床非常平坦
+        const detail = noise2D(worldX * 0.022, worldZ * 0.022) * 7;
+        return floorBase + detail * 0.25; 
     } else if (continental < 0.1) {
-        // ── 海岸過渡帶 ────────────────────────────────────────
-        // t: 0(靠近深海) ~ 1(靠近陸地)
+        // Coast interpolation
         const t = (continental + 0.35) / 0.45;
-        const tSmooth = t * t * (3 - 2 * t); // smoothstep
+        const tSmooth = t * t * (3 - 2 * t);
+        
+        const detail = noise2D(worldX * 0.022, worldZ * 0.022) * 7;
         const oceanEdgeHeight = SEA_LEVEL - 4 + detail * 0.4;
-        const landEdgeHeight  = SEA_LEVEL + 4 + detail * 0.8;
+        
+        const weights = getBiomeWeights(worldX, worldZ);
+        const landEdgeHeight = getLandHeight(worldX, worldZ, weights);
+        
         return oceanEdgeHeight + (landEdgeHeight - oceanEdgeHeight) * tSmooth;
     } else {
-        // ── 陸地 ──────────────────────────────────────────────
-        // continental: 0.1 ~ 1.4, t: 0 ~ 1
-        const t = Math.min(1, (continental - 0.1) / 1.0);
-        // 越深入內陸，地勢越高（山脈）
-        const heightBoost = t * 8;
-        return SEA_LEVEL + 4 + heightBoost + detail;
+        // Land
+        const weights = getBiomeWeights(worldX, worldZ);
+        return getLandHeight(worldX, worldZ, weights);
     }
 }
 
 export function getDensity(worldX: number, worldY: number, worldZ: number): number {
     const baseHeight = getBaseHeight(worldX, worldZ);
-
-    // FIX: 3D noise 振幅大幅降低 (8→2.5)
-    // 且只在距離地表 8 格以下才逐步生效 → 地表不會再被 3D noise 挖出大坑
-    const depthBelow = baseHeight - worldY;
-    const surfaceMask = Math.max(0, Math.min(1, (depthBelow - 4) / 8)); // 0 在地表附近, 1 在深處
-    const noise3d = noise3D(worldX * 0.04, worldY * 0.04, worldZ * 0.04) * 2.5 * surfaceMask;
-
-    return baseHeight - worldY + noise3d;
+    // 1.12 style: Pure heightmap. No 3D noise deformation near surface.
+    return baseHeight - worldY;
 }
 
 // ─────────────────────────────────────────────────────────────

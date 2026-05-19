@@ -44,11 +44,60 @@ export class CarverSystem {
         return 6;
     }
 
-    private isEntranceCandidate(wx: number, wz: number, baseHeight: number): boolean {
-        if (baseHeight <= SEA_LEVEL + 2) return false;
-        if (this.getSlope(wx, wz, baseHeight) < 5) return false;
-        const n = noise2D(wx * 0.02 + 500, wz * 0.02 - 500);
-        return n > 0.82;
+    private allowedNearSurface(shape: Ellipsoid, baseHeight: number, wy: number): boolean {
+        const depth = baseHeight - wy;
+        if (shape.type !== 'tunnel') return true;
+        if (depth <= 5) {
+            if (shape.rx > 2.4 || shape.ry > 2.0) return false;
+        }
+        return true;
+    }
+
+    private canSurfaceBreach(shape: Ellipsoid, wx: number, wy: number, wz: number, baseHeight: number): boolean {
+        const depth = baseHeight - wy;
+
+        if (shape.type === 'tunnel') {
+            if (baseHeight <= SEA_LEVEL + 2) return false;
+            const slope = this.getSlope(wx, wz, baseHeight);
+            if (slope < 4) return false;
+            const n = noise2D(wx * 0.02 + 500, wz * 0.02 - 500);
+            if (n <= 0.72) return false;
+            if (depth > 5) return true;
+            return true;
+        }
+
+        if (shape.type === 'room') {
+            if (depth <= 7) return false;
+            if (depth <= 10) {
+                const slope = this.getSlope(wx, wz, baseHeight);
+                if (slope < 6) return false;
+                const n = noise2D(wx * 0.015 + 900, wz * 0.015 - 900);
+                if (n <= 0.93) return false;
+            }
+            return true;
+        }
+
+        if (shape.type === 'ravine') {
+            if (baseHeight <= SEA_LEVEL + 6) return false;
+            if (depth <= 10) return false;
+            if (depth <= 14) {
+                const slope = this.getSlope(wx, wz, baseHeight);
+                if (slope < 7) return false;
+                const n = noise2D(wx * 0.012 + 1300, wz * 0.012 - 1300);
+                if (n <= 0.96) return false;
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    private entranceVerticalWeight(baseHeight: number, wy: number): number {
+        const depth = baseHeight - wy;
+        if (depth < 2) return 0;
+        if (depth <= 5) return 1;
+        if (depth <= 8) return 0.5;
+        return 0;
     }
 
     private generateChunkFeatures(scx: number, scz: number): Ellipsoid[] {
@@ -73,12 +122,12 @@ export class CarverSystem {
 
         for (let i = 0; i < count; i++) {
             const startX = scx * 16 + rng.float(0, 16);
-            let startY = rng.int(-28, 8);
+            let startY = rng.int(-22, 12);
             const startZ = scz * 16 + rng.float(0, 16);
 
             // Occasional large room replacing the start
             if (rng.chance(0.15)) {
-                startY = rng.int(-22, 12);
+                startY = rng.int(-24, 6);
                 const r = rng.float(4, 9);
                 shapes.push({
                     cx: startX, cy: startY, cz: startZ,
@@ -104,7 +153,7 @@ export class CarverSystem {
         // 2. Generate Ravines
         if (rng.chance(0.015)) {
             const startX = scx * 16 + rng.float(0, 16);
-            const startY = rng.int(-22, 5);
+            const startY = rng.int(-24, 0);
             const startZ = scz * 16 + rng.float(0, 16);
 
             const yaw = rng.float(0, Math.PI * 2);
@@ -268,7 +317,6 @@ export class CarverSystem {
                 const wz = minZ + lz;
                 
                 const baseHeight = getBaseHeight(wx, wz);
-                let entranceStatus = -1; // -1 = unknown, 0 = false, 1 = true
 
                 for (let ly = 0; ly < 16; ly++) {
                     const wy = minY + ly;
@@ -284,14 +332,16 @@ export class CarverSystem {
                             const depth = baseHeight - wy;
                             const roof = this.getSurfaceRoof(s.type);
                             
-                            if (depth <= roof) {
-                                if (s.type === 'ravine' && baseHeight <= SEA_LEVEL + 4) continue;
-
-                                if (entranceStatus === -1) {
-                                    entranceStatus = this.isEntranceCandidate(wx, wz, baseHeight) ? 1 : 0;
-                                }
-                                if (entranceStatus === 0) continue;
+                            if (depth > roof) {
+                                mask[lx * 256 + ly * 16 + lz] = 1;
+                                break;
                             }
+
+                            if (!this.allowedNearSurface(s, baseHeight, wy)) continue;
+
+                            if (!this.canSurfaceBreach(s, wx, wy, wz, baseHeight)) continue;
+
+                            if (this.entranceVerticalWeight(baseHeight, wy) === 0) continue;
                             
                             mask[lx * 256 + ly * 16 + lz] = 1;
                             break; 
