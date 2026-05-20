@@ -64,7 +64,7 @@ self.onmessage = (e) => {
     }
 
     // ── 建 geometry buffers ───────────────────────────────────
-    // block type → buffer: 1=grass, 2=log, 3=leaves, 4=water, 5=sand
+    // block type → buffer: 1=grass, 2=log, 3=leaves, 4=water, 5=sand, 6=stone
     const typeData: Record<number, {
         positions: number[]; normals: number[]; uvs: number[]; indices: number[]; ndx: number
     }> = {
@@ -73,6 +73,7 @@ self.onmessage = (e) => {
         3: { positions:[], normals:[], uvs:[], indices:[], ndx:0 },
         4: { positions:[], normals:[], uvs:[], indices:[], ndx:0 },
         5: { positions:[], normals:[], uvs:[], indices:[], ndx:0 },
+        6: { positions:[], normals:[], uvs:[], indices:[], ndx:0 },
     };
 
     for (let lx = 0; lx < CHUNK_SIZE; lx++)
@@ -150,6 +151,7 @@ self.onmessage = (e) => {
     finalizeBuffer('leaves',3);
     finalizeBuffer('water', 4);
     finalizeBuffer('sand',  5);
+    finalizeBuffer('stone', 6);
 
     (self as unknown as Worker).postMessage(response, transferList);
 };

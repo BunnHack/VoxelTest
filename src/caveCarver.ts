@@ -341,7 +341,13 @@ export class CarverSystem {
 
                             if (!this.canSurfaceBreach(s, wx, wy, wz, baseHeight)) continue;
 
-                            if (this.entranceVerticalWeight(baseHeight, wy) === 0) continue;
+                            const vWeight = this.entranceVerticalWeight(baseHeight, s.cy);
+                            if (vWeight === 0) continue;
+                            if (vWeight < 1) {
+                                // Deterministic random check for partial weight
+                                const r = noise2D(wx * 0.1, wz * 0.1) * 0.5 + 0.5; // map -1..1 to 0..1
+                                if (r > vWeight) continue;
+                            }
                             
                             mask[lx * 256 + ly * 16 + lz] = 1;
                             break; 

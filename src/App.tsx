@@ -433,12 +433,22 @@ const useGameMaterials = () => {
             }
         });
 
+        const stoneTex = createTex(ctx => {
+            ctx.fillStyle = '#7d7d7d';
+            ctx.fillRect(0, 0, 16, 16);
+            for (let i = 0; i < 100; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? '#6a6a6a' : '#8e8e8e';
+                ctx.fillRect(Math.floor(Math.random()*16), Math.floor(Math.random()*16), 1, 1);
+            }
+        });
+
         return {
             grass: new THREE.MeshLambertMaterial({ map: grassTex }),
             log: new THREE.MeshLambertMaterial({ map: logTex }),
             leaves: new THREE.MeshLambertMaterial({ map: leavesTex, transparent: true, alphaTest: 0.1 }),
             water: new THREE.MeshLambertMaterial({ map: waterTex, transparent: true, opacity: 0.8, alphaTest: 0.01, depthWrite: false, color: "#aaddff" }),
-            sand: new THREE.MeshLambertMaterial({ map: sandTex })
+            sand: new THREE.MeshLambertMaterial({ map: sandTex }),
+            stone: new THREE.MeshLambertMaterial({ map: stoneTex })
         };
     }, []);
 };
@@ -464,7 +474,7 @@ function SunLight() {
 }
 
 function ChunkMesh({ cx, cy, cz, materials }: { cx: number; cy: number; cz: number; materials: any }) {
-    const [geometries, setGeometries] = useState<{ grass: THREE.BufferGeometry, log: THREE.BufferGeometry, leaves: THREE.BufferGeometry, water: THREE.BufferGeometry, sand: THREE.BufferGeometry } | null>(null);
+    const [geometries, setGeometries] = useState<{ grass: THREE.BufferGeometry, log: THREE.BufferGeometry, leaves: THREE.BufferGeometry, water: THREE.BufferGeometry, sand: THREE.BufferGeometry, stone: THREE.BufferGeometry } | null>(null);
     const [rev, setRev] = useState(0);
 
     useEffect(() => {
@@ -501,6 +511,7 @@ function ChunkMesh({ cx, cy, cz, materials }: { cx: number; cy: number; cz: numb
                 leaves: createGeo(data.leaves) as THREE.BufferGeometry,
                 water: createGeo(data.water) as THREE.BufferGeometry,
                 sand: createGeo(data.sand) as THREE.BufferGeometry,
+                stone: createGeo(data.stone) as THREE.BufferGeometry,
             });
         });
 
@@ -517,6 +528,7 @@ function ChunkMesh({ cx, cy, cz, materials }: { cx: number; cy: number; cz: numb
                 if (geometries.leaves) geometries.leaves.dispose();
                 if (geometries.water) geometries.water.dispose();
                 if (geometries.sand) geometries.sand.dispose();
+                if (geometries.stone) geometries.stone.dispose();
             }
         };
     }, [geometries]);
@@ -530,6 +542,9 @@ function ChunkMesh({ cx, cy, cz, materials }: { cx: number; cy: number; cz: numb
             )}
             {geometries.sand && (
                 <mesh geometry={geometries.sand} material={materials.sand} frustumCulled={true} />
+            )}
+            {geometries.stone && (
+                <mesh geometry={geometries.stone} material={materials.stone} frustumCulled={true} />
             )}
             {geometries.log && (
                 <mesh geometry={geometries.log} material={materials.log} frustumCulled={true} />

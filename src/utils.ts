@@ -37,61 +37,71 @@ function getContinentalness(worldX: number, worldZ: number): number {
 // 1.12 Biome-based Terrain Generation
 // ─────────────────────────────────────────────────────────────
 function getBiomeWeights(x: number, z: number) {
-    const continental = noise2D(x * 0.0025 - 500, z * 0.0025 + 500);
+    const continental = noise2D(x * 0.0025 - 500, z * 0.0025 + 500); // -1 to 1
     const humidity    = noise2D(x * 0.0018 + 300, z * 0.0018 + 300);
     const mountainness= noise2D(x * 0.0035 + 900, z * 0.0035 - 900);
 
-    const mapP = (v: number, min: number, max: number) => Math.max(0, Math.min(1, (v - min) / (max - min)));
+    const wE = Math.max(0, Math.min(1, (mountainness - 0.2) / 0.3));
+    const pCont = Math.max(0, Math.min(1, (continental - 0.0) / 0.3));
+    const pHum = Math.max(0, Math.min(1, (-humidity - 0.0) / 0.3));
+    const wP = pCont * pHum;
+    const wF = Math.max(0, Math.min(1, (humidity - 0.1) / 0.3));
+    const wR = Math.max(0, Math.min(1, (continental + 0.1) / 0.3));
+    
+    // Plains as fallback
+    const wPl = 0.5;
 
-    const wE = mapP(mountainness, 0.35, 0.55);
-    const wP = mapP(continental, 0.15, 0.35) * mapP(-humidity, 0.0, 0.2);
-    const wF = mapP(humidity, 0.25, 0.45);
-    const wR = mapP(continental, 0.05, 0.25);
+    const e2 = wE * wE * 2.0;
+    const p2 = wP * wP;
+    const f2 = wF * wF;
+    const r2 = wR * wR;
+    const pl2= wPl * wPl;
 
-    const actE = wE;
-    const actP = Math.min(1 - actE, wP);
-    const actF = Math.min(1 - actE - actP, wF);
-    const actR = Math.min(1 - actE - actP - actF, wR);
-    const actPl = Math.max(0, 1 - actE - actP - actF - actR);
-
-    return { extreme: actE, plateau: actP, forest: actF, rolling: actR, plains: actPl };
+    const sum = e2 + p2 + f2 + r2 + pl2;
+    return {
+        extreme: e2 / sum,
+        plateau: p2 / sum,
+        forest: f2 / sum,
+        rolling: r2 / sum,
+        plains: pl2 / sum
+    };
 }
 
 function getPlainsHeight(x: number, z: number): number {
-    const base = 18;
+    const base = 13;
     const detail = noise2D(x*0.01, z*0.01) * 2
                  + noise2D(x*0.03, z*0.03) * 0.8;
     return base + detail;
 }
 
 function getRollingHillsHeight(x: number, z: number): number {
-    const base = 22;
-    const detail = noise2D(x*0.012, z*0.012) * 4
-                 + noise2D(x*0.035, z*0.035) * 1.5
+    const base = 15;
+    const detail = noise2D(x*0.012, z*0.012) * 5
+                 + noise2D(x*0.035, z*0.035) * 2
                  + noise2D(x*0.08, z*0.08) * 0.5;
     return base + detail;
 }
 
 function getForestHillsHeight(x: number, z: number): number {
-    const base = 24;
-    const detail = noise2D(x*0.011, z*0.011) * 5
-                 + noise2D(x*0.028, z*0.028) * 2
-                 + noise2D(x*0.07, z*0.07) * 0.8;
+    const base = 17;
+    const detail = noise2D(x*0.011, z*0.011) * 6
+                 + noise2D(x*0.028, z*0.028) * 3
+                 + noise2D(x*0.07, z*0.07) * 1.0;
     return base + detail;
 }
 
 function getExtremeHillsHeight(x: number, z: number): number {
-    const base = 30;
-    const macro = noise2D(x*0.006, z*0.006) * 12;
-    const ridge = Math.abs(noise2D(x*0.014, z*0.014)) * 10;
-    const detail= noise2D(x*0.04, z*0.04) * 2;
+    const base = 22;
+    const macro = noise2D(x*0.006, z*0.006) * 16;
+    const ridge = Math.abs(noise2D(x*0.014, z*0.014)) * 12;
+    const detail= noise2D(x*0.04, z*0.04) * 3;
     return base + macro + ridge + detail;
 }
 
 function getPlateauHeight(x: number, z: number): number {
-    const raw = 28 + noise2D(x*0.008, z*0.008) * 8;
-    let height = Math.round(raw / 3) * 3;
-    height += noise2D(x*0.05, z*0.05) * 0.8;
+    const raw = 20 + noise2D(x*0.008, z*0.008) * 10;
+    let height = Math.round(raw / 4) * 4;
+    height += noise2D(x*0.05, z*0.05) * 1.5;
     return height;
 }
 
@@ -102,12 +112,11 @@ function getLandHeight(x: number, z: number, weights: any): number {
             getExtremeHillsHeight(x, z) * weights.extreme +
             getPlateauHeight(x, z) * weights.plateau;
             
-    const cliffWeight = weights.extreme + weights.plateau;
-    if (cliffWeight > 0.1) {
+    const cliffWeight = weights.extreme * 0.8 + weights.plateau * 0.6;
+    if (cliffWeight > 0.05) {
         const cliffNoise = noise2D(x*0.02 + 1200, z*0.02 - 1200);
-        if (cliffNoise > 0.55) {
-            h += (cliffNoise - 0.55) * 10 * cliffWeight;
-        }
+        const cliffAmount = Math.max(0, (cliffNoise - 0.4) * 15);
+        h += cliffAmount * cliffWeight;
     }
     return h;
 }
@@ -224,13 +233,17 @@ export function getBlock(worldX: number, worldY: number, worldZ: number): number
     const baseHeight = getBaseHeight(worldX, worldZ); // 快取一次
 
     if (getBaseBlock(worldX, worldY, worldZ) === 1) {
-        // ── FIX OCEAN 3: 海底/沙灘用沙 (block 5) ──────────────
-        // 海面下，或海面上 1~2 格（沙灘）的地表頂層用沙
-        const isNearSea = baseHeight < SEA_LEVEL + 3;
-        if (isNearSea) {
-            result = 5; // sand
+        const depth = baseHeight - worldY;
+        if (depth > 3) {
+            result = 6; // stone
         } else {
-            result = 1; // grass/dirt
+            // 海面下，或海面上 1~2 格（沙灘）的地表頂層用沙
+            const isNearSea = baseHeight < SEA_LEVEL + 3;
+            if (isNearSea) {
+                result = 5; // sand
+            } else {
+                result = 1; // grass/dirt
+            }
         }
     } else {
         // ── 樹木生成 ──────────────────────────────────────────
